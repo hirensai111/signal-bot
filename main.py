@@ -172,7 +172,7 @@ async def _stats_logger(
     """Print pipeline stats every 30 seconds."""
     while not shutdown_event.is_set():
         await asyncio.sleep(30)
-        counts = ingestor.counts()
+        counts = ingestor.counts
         async with AsyncSessionLocal() as session:
             open_positions = await session.scalar(
                 select(func.count()).where(Signal.status == "triggered")
