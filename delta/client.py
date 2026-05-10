@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 ENDPOINTS = {
     "testnet": {
         "rest": "https://cdn-ind.testnet.deltaex.org",
-        "ws": "wss://socket-ind.testnet.deltaex.org",
+        "ws": "wss://socketv2-ind-elb.testnet.deltaex.org",
     },
     "production": {
         "rest": "https://api.india.delta.exchange",
