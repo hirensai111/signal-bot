@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from sqlalchemy import select
 
+from signal_bot.config import settings
 from signal_bot.db.models import RiskState, Signal, SignalOutcome
 
 logger = logging.getLogger(__name__)
@@ -95,11 +96,23 @@ class Reconciler:
     async def _reconcile(self, is_startup: bool) -> None:
         logger.info("Running reconciliation (startup=%s)", is_startup)
 
-        # Fetch Delta truth
-        positions_resp = await self.delta_client.get_open_positions()
-        orders_resp = await self.delta_client.get_open_orders()
+        # Fetch Delta truth per symbol (Delta India /v2/positions requires product_id)
+        delta_positions: dict[int, dict] = {}
+        for symbol in settings.symbols:
+            try:
+                pid = self.delta_client.symbol_map.get_product_id(symbol)
+            except (KeyError, RuntimeError):
+                logger.debug("Skipping reconciliation for %s: not mapped on Delta", symbol)
+                continue
 
-        delta_positions = _parse_positions(positions_resp)
+            try:
+                resp = await self.delta_client.get_open_positions(product_id=pid)
+                positions = _parse_positions(resp)
+                delta_positions.update(positions)
+            except Exception:
+                logger.exception("Failed to fetch positions for %s (pid=%s)", symbol, pid)
+
+        orders_resp = await self.delta_client.get_open_orders()
         delta_orders = _parse_orders(orders_resp)
 
         async with self.session_factory() as session:

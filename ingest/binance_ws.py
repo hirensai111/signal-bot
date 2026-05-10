@@ -110,12 +110,11 @@ class DataIngestor:
         backoff = 1.0
         while not self._shutdown.is_set():
             try:
-                async with bsm.futures_multiplex_socket(streams) as stream:
+                async with bsm.futures_multiplex_socket(streams) as ws:
                     logger.info("WebSocket connected (%d streams).", len(streams))
                     backoff = 1.0
-                    async for msg in stream:
-                        if self._shutdown.is_set():
-                            break
+                    while not self._shutdown.is_set():
+                        msg = await ws.recv()
                         await self._handle_message(msg)
                         if self.message_limit and self._total_received >= self.message_limit:
                             self._shutdown.set()

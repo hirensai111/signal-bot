@@ -9,34 +9,26 @@ import pytest
 from signal_bot.ingest.binance_ws import AggTrade, DataIngestor, Kline
 
 
-class AsyncIterator:
-    def __init__(self, items):
-        self.items = items
-        self.index = 0
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self.index >= len(self.items):
-            raise StopAsyncIteration
-        item = self.items[self.index]
-        self.index += 1
-        return item
-
-
 class MockStream:
+    """Mock websocket that implements recv() for python-binance >=1.0.20."""
+
     def __init__(self, messages):
         self._messages = messages
+        self._index = 0
+
+    async def recv(self):
+        if self._index >= len(self._messages):
+            # Simulate connection drop by raising when exhausted
+            raise ConnectionError("Mock stream closed")
+        msg = self._messages[self._index]
+        self._index += 1
+        return msg
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
         pass
-
-    def __aiter__(self):
-        return AsyncIterator(self._messages)
 
 
 @pytest.mark.asyncio
@@ -248,3 +240,87 @@ async def test_reconnection_backoff_capped() -> None:
     # backoff should be 1s after first failure, then capped
     args, _ = mock_sleep.call_args
     assert args[0] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_websocket_recv_pattern_regression() -> None:
+    """Regression: python-binance >=1.0.20 uses ws.recv() instead of async-for.
+
+    Verify that the ingestor calls recv() on the websocket object and
+    correctly processes messages received via that path.
+    """
+    queue = asyncio.Queue()
+    ingestor = DataIngestor(queue, message_limit=2)
+
+    with patch("signal_bot.ingest.binance_ws.AsyncClient") as MockClient:
+        client = AsyncMock()
+        MockClient.create = AsyncMock(return_value=client)
+        client.futures_klines.return_value = []
+
+        with patch("signal_bot.ingest.binance_ws.BinanceSocketManager") as MockBSM:
+            bsm = MagicMock()
+            MockBSM.return_value = bsm
+
+            messages = [
+                {
+                    "stream": "btcusdt@kline_1m",
+                    "data": {
+                        "e": "kline",
+                        "E": 1,
+                        "s": "BTCUSDT",
+                        "k": {
+                            "t": 1704067200000,
+                            "T": 1704067259999,
+                            "s": "BTCUSDT",
+                            "i": "1m",
+                            "f": 1,
+                            "L": 1,
+                            "o": "100",
+                            "h": "101",
+                            "l": "99",
+                            "c": "100",
+                            "v": "10",
+                            "n": 1,
+                            "x": True,
+                            "q": "1000",
+                            "V": "5",
+                            "Q": "500",
+                            "B": "0",
+                        },
+                    },
+                },
+                {
+                    "stream": "btcusdt@aggTrade",
+                    "data": {
+                        "e": "aggTrade",
+                        "E": 1,
+                        "s": "BTCUSDT",
+                        "a": 999,
+                        "p": "100.50",
+                        "q": "2.0",
+                        "f": 1,
+                        "l": 1,
+                        "T": 1704067260000,
+                        "m": False,
+                    },
+                },
+            ]
+
+            mock_ws = MockStream(messages + [ConnectionError("closed")])
+
+            bsm.futures_multiplex_socket.return_value = mock_ws
+
+            await ingestor.run()
+
+    # Verify messages were received via recv() path
+    assert mock_ws._index == 2  # 2 messages consumed
+
+    assert queue.qsize() == 2
+    item1 = await queue.get()
+    assert isinstance(item1, Kline)
+    assert item1.symbol == "BTCUSDT"
+
+    item2 = await queue.get()
+    assert isinstance(item2, AggTrade)
+    assert item2.symbol == "BTCUSDT"
+    assert item2.trade_id == 999
