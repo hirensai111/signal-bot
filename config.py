@@ -1,5 +1,6 @@
 """Application configuration loaded from environment via pydantic-settings."""
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +38,7 @@ class Settings(BaseSettings):
     delta_mode: str = "testnet"  # "testnet" or "production"
     delta_api_key: str = ""
     delta_api_secret: str = ""
+    delta_ws_origin: str = ""  # overridden by model_validator below
 
     # Execution
     exec_mode: str = "dry_run"  # "dry_run" or "live"
@@ -47,6 +49,16 @@ class Settings(BaseSettings):
     max_concurrent_positions: int = 3
     max_consecutive_losses: int = 5
     min_balance_usdt: float = 50.0
+
+    @model_validator(mode="after")
+    def set_default_ws_origin(self):
+        if not self.delta_ws_origin:
+            self.delta_ws_origin = (
+                "https://demo.delta.exchange"
+                if self.delta_mode == "testnet"
+                else "https://india.delta.exchange"
+            )
+        return self
 
 
 settings = Settings()

@@ -484,7 +484,11 @@ class DeltaWebSocket:
         if session is None:
             raise RuntimeError("DeltaClient session not initialized")
 
-        async with session.ws_connect(self._ws_url) as ws:
+        headers = {
+            "Origin": settings.delta_ws_origin,
+            "User-Agent": "Mozilla/5.0 (signalbot/1.0)",
+        }
+        async with session.ws_connect(self._ws_url, headers=headers) as ws:
             await self._authenticate(ws)
             await ws.send_json(
                 {

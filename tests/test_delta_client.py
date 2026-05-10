@@ -426,3 +426,33 @@ async def test_ws_puts_events_on_queue():
     assert e1["type"] == "position"
     e2 = await queue.get()
     assert e2["type"] == "order"
+
+
+@pytest.mark.asyncio
+async def test_ws_connect_sends_origin_header():
+    """Regression: Delta India edge requires Origin header on WS handshake."""
+    client = DeltaClient(api_key="k", api_secret="s", mode="testnet")
+
+    msg = MagicMock()
+    msg.type = aiohttp.WSMsgType.CLOSED
+
+    fake_ws = _FakeWSConnection([msg])
+
+    mock_session = MagicMock()
+    mock_session.ws_connect = MagicMock(return_value=fake_ws)
+    client._session = mock_session
+
+    queue = asyncio.Queue()
+    ws_client = DeltaWebSocket(client, queue)
+    ws_client._running = True
+
+    with patch.object(ws_client, "_authenticate", new_callable=AsyncMock):
+        task = asyncio.create_task(ws_client._connect_and_listen())
+        await asyncio.wait_for(task, timeout=1.0)
+
+    mock_session.ws_connect.assert_called_once()
+    _, kwargs = mock_session.ws_connect.call_args
+    assert "headers" in kwargs
+    headers = kwargs["headers"]
+    assert headers["Origin"] == "https://demo.delta.exchange"
+    assert "Mozilla/5.0" in headers["User-Agent"]
