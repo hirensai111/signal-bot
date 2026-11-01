@@ -1,0 +1,31 @@
+# The production strategy (signal_bot/signals/sweep_detector.py), replayed through the live modules.
+name = "liquidity_sweep"
+version = "1.0.0"
+strategy = "liquidity_sweep"
+description = "Production baseline: HTF swing-level sweep, reclaim, volume spike and CVD divergence on 5m bars, stop beyond the sweep, target the nearer of 2R or the next HTF level."
+
+[params]
+timeframe = "5m"
+
+[costs]
+taker_fee = 0.0005
+maker_fee = 0.0002
+half_spread_bps = 1.0
+impact_coef = 0.5
+max_participation = 0.05
+max_entry_slippage_bps = 15.0
+funding_rate_8h = 0.0001
+
+[sizing]
+initial_equity = 10000.0
+risk_fraction = 0.005
+max_leverage = 10.0
+
+[validation]
+oos_fraction = 0.33
+walk_forward_train_days = 90
+walk_forward_test_days = 30
+cost_multipliers = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
+random_baseline_runs = 50
+seed = 20261101
+min_oos_trades = 30

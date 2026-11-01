@@ -1,6 +1,6 @@
 """Shared pytest fixtures."""
 
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -64,7 +64,9 @@ async def legacy_sqlite_isolation(request):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False, future=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    print(f"[DEBUG] legacy_sqlite_isolation: created engine {id(engine)} for {mod.__name__}::{request.function.__name__}")
+    print(
+        f"[DEBUG] legacy_sqlite_isolation: created engine {id(engine)} for {mod.__name__}::{request.function.__name__}"
+    )
 
     TestSessionLocal = async_sessionmaker(
         bind=engine,

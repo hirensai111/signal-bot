@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from signal_bot.config import settings
-from signal_bot.db.models import AggTrade as AggTradeModel, Candle1m, Candle5m
+from signal_bot.db.models import AggTrade as AggTradeModel
+from signal_bot.db.models import Candle1m, Candle5m
 from signal_bot.ingest.binance_ws import AggTrade, Kline
 from signal_bot.storage.writer import QueueWriter
 
@@ -78,8 +79,12 @@ async def test_writer_persists_closed_candles_and_trades() -> None:
         batch_size=2,
     )
 
-    await queue.put(_kline(interval="1m", open_time=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)))
-    await queue.put(_kline(interval="5m", open_time=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)))
+    await queue.put(
+        _kline(interval="1m", open_time=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc))
+    )
+    await queue.put(
+        _kline(interval="5m", open_time=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc))
+    )
     await queue.put(_agg_trade())
 
     task = asyncio.create_task(writer.run())
@@ -133,6 +138,7 @@ async def test_writer_emits_closed_candle_events() -> None:
         batch_size=10,
     )
 
+    candles = writer.subscribe("test")
     await queue.put(_kline(interval="1m", closed=True))
     await queue.put(_kline(interval="1m", closed=False))
 
@@ -142,8 +148,8 @@ async def test_writer_emits_closed_candle_events() -> None:
     await task
 
     # Only the closed candle should be emitted
-    assert writer.closed_candle_queue.qsize() == 1
-    event = await writer.closed_candle_queue.get()
+    assert candles.qsize() == 1
+    event = await candles.get()
     assert isinstance(event, Kline)
     assert event.closed is True
 
@@ -158,6 +164,7 @@ async def test_writer_routes_htf_candles_to_event_queue_not_db() -> None:
         batch_size=10,
     )
 
+    candles = writer.subscribe("test")
     await queue.put(_kline(interval="1h", closed=True))
     await queue.put(_kline(interval="4h", closed=True))
 
@@ -166,7 +173,7 @@ async def test_writer_routes_htf_candles_to_event_queue_not_db() -> None:
     writer.shutdown()
     await task
 
-    assert writer.closed_candle_queue.qsize() == 2
+    assert candles.qsize() == 2
 
     async with TestSessionLocal() as session:
         assert len((await session.execute(select(Candle1m))).scalars().all()) == 0

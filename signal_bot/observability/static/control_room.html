@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal Bot control room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --plane: #eef1f0;
+  --surface: #fbfcfb;
+  --surface-2: #f3f6f5;
+  --ink: #1b2a26;
+  --ink-2: #4b5a55;
+  --muted: #74817c;
+  --rule: #d5dcd9;
+  --rule-strong: #b7c2be;
+  --accent: #1d4e89;
+  --accent-soft: #dbe6f3;
+  --series-1: #2a78d6;
+  --grid: #e3e8e6;
+  --good: #0ca30c;
+  --good-ink: #006300;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --critical-ink: #a32424;
+  --critical-wash: #fbe9e8;
+  --lever: #b42d2d;
+  --lever-ink: #ffffff;
+  --focus: #1d4e89;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane: #0f1715;
+    --surface: #16201d;
+    --surface-2: #1c2825;
+    --ink: #e6ece9;
+    --ink-2: #b9c4c0;
+    --muted: #8a9893;
+    --rule: #2a3733;
+    --rule-strong: #3a4945;
+    --accent: #8fb4e6;
+    --accent-soft: #1f3046;
+    --series-1: #3987e5;
+    --grid: #22302c;
+    --good-ink: #3fc33f;
+    --critical-ink: #f08a8a;
+    --critical-wash: #3a1f1f;
+    --lever: #d03b3b;
+    --focus: #8fb4e6;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0f1715;
+  --surface: #16201d;
+  --surface-2: #1c2825;
+  --ink: #e6ece9;
+  --ink-2: #b9c4c0;
+  --muted: #8a9893;
+  --rule: #2a3733;
+  --rule-strong: #3a4945;
+  --accent: #8fb4e6;
+  --accent-soft: #1f3046;
+  --series-1: #3987e5;
+  --grid: #22302c;
+  --good-ink: #3fc33f;
+  --critical-ink: #f08a8a;
+  --critical-wash: #3a1f1f;
+  --lever: #d03b3b;
+  --focus: #8fb4e6;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font: 400 15px/1.5 "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.cond { font-family: "Barlow Semi Condensed", "Barlow", system-ui, sans-serif; }
+.num { font-variant-numeric: tabular-nums; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.page { max-width: 1320px; margin: 0 auto; padding: 20px 16px 48px; }
+
+/* ---- header ---------------------------------------------------------- */
+.masthead {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
+  padding-bottom: 14px; border-bottom: 1px solid var(--rule-strong);
+}
+.masthead h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.01em; }
+.env {
+  font-family: "Barlow Semi Condensed", sans-serif; font-weight: 700; font-size: 14px;
+  padding: 1px 10px; border-radius: 3px; border: 2px solid var(--accent); color: var(--accent);
+}
+.env[data-env="live"] { border-color: var(--critical); color: var(--critical-ink); background: var(--critical-wash); }
+.meta { color: var(--ink-2); font-size: 14px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.meta span { white-space: nowrap; }
+.meta .stale { color: var(--critical-ink); font-weight: 600; }
+
+/* ---- aspect banner (the one bold element) ---------------------------- */
+.layout {
+  display: grid; gap: 18px; margin-top: 18px; align-items: start;
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+.main-col, .side-stack { display: grid; gap: 18px; align-content: start; min-width: 0; }
+.full { grid-column: 1 / -1; }
+.aspect {
+  display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center;
+  padding: 18px 22px; background: var(--surface); border: 1px solid var(--rule);
+  border-left: 8px solid var(--aspect, var(--muted)); border-radius: 4px;
+}
+.lamp {
+  width: 56px; height: 56px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--aspect, var(--muted)) 55%, white), var(--aspect, var(--muted)) 62%);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--aspect, var(--muted)) 18%, transparent), inset 0 -3px 6px rgb(0 0 0 / 0.18);
+}
+.aspect h2 {
+  margin: 0; font-family: "Barlow Semi Condensed", sans-serif; font-weight: 700;
+  font-size: clamp(28px, 4vw, 44px); line-height: 1.05; letter-spacing: -0.005em;
+}
+.aspect p { margin: 6px 0 0; color: var(--ink-2); max-width: 70ch; }
+.aspect[data-state="healthy"] { --aspect: var(--good); }
+.aspect[data-state="degraded"] { --aspect: var(--warning); }
+.aspect[data-state="halted"], .aspect[data-state="failed"] { --aspect: var(--critical); }
+.aspect[data-state="unreachable"] { --aspect: var(--muted); }
+
+/* ---- KPI strip ------------------------------------------------------- */
+.kpis {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 4px;
+}
+.kpi { padding: 14px 18px 16px; border-left: 1px solid var(--rule); min-width: 0; }
+.kpi:first-child { border-left: 0; }
+.kpi .label { color: var(--ink-2); font-size: 14px; }
+.kpi .value { font-family: "Barlow Semi Condensed", sans-serif; font-weight: 600; font-size: 32px; line-height: 1.1; margin-top: 2px; }
+.kpi .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.kpi .sub.up { color: var(--good-ink); }
+.kpi .sub.down { color: var(--critical-ink); }
+.meter { height: 8px; border-radius: 4px; background: var(--accent-soft); margin-top: 10px; overflow: hidden; }
+.meter > i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--accent); transition: width 300ms ease; }
+.meter[data-level="warning"] > i { background: var(--warning); }
+.meter[data-level="critical"] > i { background: var(--critical); }
+
+/* ---- panels ---------------------------------------------------------- */
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 16px 18px; min-width: 0; }
+.panel h3 { margin: 0 0 10px; font-size: 17px; font-weight: 600; }
+.panel .hint { color: var(--muted); font-size: 13px; margin: -6px 0 10px; }
+
+/* ---- halt lever ------------------------------------------------------ */
+.lever { border: 2px solid var(--lever); background: var(--surface); }
+.lever h3 { color: var(--critical-ink); }
+.lever label { display: block; font-size: 14px; color: var(--ink-2); margin: 10px 0 4px; }
+.lever input, .lever textarea {
+  width: 100%; font: inherit; color: var(--ink); background: var(--surface-2);
+  border: 1px solid var(--rule-strong); border-radius: 3px; padding: 7px 9px;
+}
+.lever textarea { min-height: 58px; resize: vertical; }
+.btn {
+  font: 600 16px/1 "Barlow Semi Condensed", sans-serif; letter-spacing: 0.01em;
+  border-radius: 4px; padding: 12px 16px; cursor: pointer; border: 2px solid transparent; width: 100%; margin-top: 12px;
+}
+.btn-halt { background: var(--lever); color: var(--lever-ink); }
+.btn-halt:hover { filter: brightness(1.08); }
+.btn-resume { background: transparent; color: var(--ink); border-color: var(--rule-strong); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+.result { font-size: 14px; margin-top: 10px; min-height: 1.5em; }
+.result.ok { color: var(--good-ink); }
+.result.err { color: var(--critical-ink); }
+details.resume { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 10px; }
+details.resume summary { cursor: pointer; font-weight: 600; }
+
+/* ---- interlocks ------------------------------------------------------ */
+.interlocks { list-style: none; margin: 0; padding: 0; }
+.interlocks li { display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; padding: 8px 0; border-top: 1px solid var(--rule); }
+.interlocks li:first-child { border-top: 0; padding-top: 0; }
+.interlocks .name { font-weight: 600; }
+.interlocks .detail { grid-column: 2; color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
+.status-icon { width: 18px; height: 18px; margin-top: 2px; }
+.breakers { margin: 10px 0 0; padding: 10px 12px; background: var(--critical-wash); border-radius: 3px; font-size: 14px; }
+.breakers b { color: var(--critical-ink); }
+.breakers ul { margin: 4px 0 0; padding-left: 18px; }
+
+/* ---- chart ----------------------------------------------------------- */
+.chart-wrap { position: relative; }
+svg.equity { width: 100%; height: 240px; display: block; overflow: visible; }
+.equity .grid line { stroke: var(--grid); stroke-width: 1; }
+.equity .axis text { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.equity .baseline { stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 4 4; }
+.equity .line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.equity .cross { stroke: var(--ink-2); stroke-width: 1; }
+.equity .dot { fill: var(--series-1); stroke: var(--surface); stroke-width: 2; }
+.tooltip {
+  position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--rule-strong);
+  border-radius: 4px; padding: 6px 9px; font-size: 13px; box-shadow: 0 2px 8px rgb(0 0 0 / 0.12); white-space: nowrap;
+}
+.tooltip b { display: block; font-size: 15px; }
+.tooltip span { color: var(--ink-2); }
+.empty { color: var(--muted); padding: 28px 0; text-align: center; }
+
+/* ---- tables ---------------------------------------------------------- */
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; font-weight: 600; color: var(--ink-2); border-bottom: 1px solid var(--rule-strong); padding: 6px 8px; white-space: nowrap; }
+td { border-bottom: 1px solid var(--rule); padding: 6px 8px; vertical-align: top; overflow-wrap: anywhere; }
+td.r, th.r { text-align: right; }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-weight: 500; white-space: nowrap; }
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--pill, var(--muted)); }
+.pill[data-tone="good"] { --pill: var(--good); }
+.pill[data-tone="warn"] { --pill: var(--warning); }
+.pill[data-tone="bad"] { --pill: var(--critical); }
+.pill[data-tone="info"] { --pill: var(--series-1); }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+.three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-size: 14px; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+.theme-toggle { margin-left: auto; font: inherit; font-size: 14px; background: none; border: 1px solid var(--rule-strong); color: var(--ink-2); border-radius: 3px; padding: 3px 10px; cursor: pointer; }
+
+@media (max-width: 1040px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  /* Single column: keep the halt control directly under the status banner. */
+  .main-col { display: contents; }
+  .aspect { order: 1; }
+  .side-stack { order: 2; }
+  .kpis { order: 3; }
+  .main-col > .panel { order: 4; }
+  .layout > .full { order: 5; }
+  .three { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi:nth-child(3) { border-left: 0; }
+  .kpi:nth-child(n+3) { border-top: 1px solid var(--rule); }
+  .kpi .value { font-size: 26px; }
+  .two { grid-template-columns: minmax(0, 1fr); }
+  .aspect { grid-template-columns: 1fr; }
+  .lamp { width: 40px; height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) { .meter > i { transition: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <h1>Signal Bot control room</h1>
+    <span class="env" id="env" data-env="unknown">…</span>
+    <div class="meta" id="meta"><span>Connecting to the bot</span></div>
+    <button class="theme-toggle" id="theme" type="button">Switch theme</button>
+  </header>
+
+  <main class="layout">
+   <div class="main-col">
+    <section class="aspect" id="aspect" data-state="unreachable" aria-live="polite">
+      <div class="lamp" aria-hidden="true"></div>
+      <div>
+        <h2 id="aspect-title">Waiting for the first status update</h2>
+        <p id="aspect-detail">This page refreshes every 3 seconds from /api/status.</p>
+      </div>
+    </section>
+
+
+    <section class="kpis" aria-label="Key figures">
+      <div class="kpi">
+        <div class="label" id="equity-label">Virtual equity</div>
+        <div class="value num" id="equity">–</div>
+        <div class="sub" id="equity-sub">&nbsp;</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Open positions</div>
+        <div class="value num" id="positions-count">–</div>
+        <div class="meter" id="positions-meter" role="meter" aria-valuemin="0" aria-label="Open positions against limit"><i></i></div>
+        <div class="sub" id="positions-sub">&nbsp;</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Daily loss used</div>
+        <div class="value num" id="risk-used">–</div>
+        <div class="meter" id="risk-meter" role="meter" aria-valuemin="0" aria-label="Daily loss against limit"><i></i></div>
+        <div class="sub" id="risk-sub">&nbsp;</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Event backlog</div>
+        <div class="value num" id="backlog">–</div>
+        <div class="sub" id="backlog-sub">&nbsp;</div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="curve-title">
+      <h3 id="curve-title">Mark-to-market equity</h3>
+      <p class="hint" id="curve-hint">Paper account marked to market on each snapshot. The dashed line is starting equity.</p>
+      <div class="chart-wrap" id="chart-wrap">
+        <svg class="equity" id="chart" role="img" aria-label="Equity over time"></svg>
+        <div class="tooltip" id="tip" hidden></div>
+      </div>
+    </section>
+   </div>
+
+    <aside class="side-stack">
+      <section class="panel lever" aria-labelledby="lever-title">
+        <h3 id="lever-title">Halt trading</h3>
+        <p class="hint">Engages the persisted kill switch. Every new order is refused until someone resumes trading here or with the CLI. Open positions keep their stops.</p>
+        <label for="token">Operator token</label>
+        <input id="token" type="password" autocomplete="off" spellcheck="false">
+        <label for="operator">Your name</label>
+        <input id="operator" type="text" autocomplete="off" maxlength="40">
+        <label for="halt-reason">Reason</label>
+        <textarea id="halt-reason" maxlength="500" placeholder="What did you see?"></textarea>
+        <button class="btn btn-halt" id="halt" type="button">Halt trading now</button>
+        <div class="result" id="halt-result" role="status"></div>
+        <details class="resume">
+          <summary>Resume trading</summary>
+          <label for="resume-reason">What was checked before resuming</label>
+          <textarea id="resume-reason" maxlength="500"></textarea>
+          <label for="resume-confirm">Type RESUME to confirm</label>
+          <input id="resume-confirm" type="text" autocomplete="off" spellcheck="false">
+          <button class="btn btn-resume" id="resume" type="button" disabled>Resume trading</button>
+          <div class="result" id="resume-result" role="status"></div>
+        </details>
+      </section>
+
+      <section class="panel" aria-labelledby="interlocks-title">
+        <h3 id="interlocks-title">Interlocks</h3>
+        <ul class="interlocks" id="interlocks"><li><span></span><span class="detail">No data yet</span></li></ul>
+        <div id="breakers"></div>
+      </section>
+    </aside>
+
+    <div class="full two">
+      <section class="panel" aria-labelledby="positions-title">
+        <h3 id="positions-title">Positions on the venue</h3>
+        <p class="hint">From the exchange stream, so this stays current even if the database is down.</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Symbol</th><th class="r">Size</th><th class="r">Entry</th><th>Stop</th><th>Updated</th></tr></thead>
+          <tbody id="positions"></tbody>
+        </table></div>
+      </section>
+      <section class="panel" aria-labelledby="account-title">
+        <h3 id="account-title">Account ledger</h3>
+        <dl class="kv" id="account"></dl>
+      </section>
+    </div>
+
+    <section class="panel full" aria-labelledby="orders-title">
+      <h3 id="orders-title">Recent orders</h3>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Order</th><th>Symbol</th><th>Side</th><th>State</th><th class="r">Filled</th><th class="r">Avg price</th><th>Stop check</th><th>Reason</th><th>Updated</th></tr></thead>
+        <tbody id="orders"></tbody>
+      </table></div>
+    </section>
+
+    <div class="full three">
+      <section class="panel" aria-labelledby="disc-title">
+        <h3 id="disc-title">Exchange discrepancies</h3>
+        <p class="hint">Found by the last reconciliation pass.</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Kind</th><th>Subject</th></tr></thead>
+          <tbody id="discrepancies"></tbody>
+        </table></div>
+      </section>
+      <section class="panel" aria-labelledby="replay-title">
+        <h3 id="replay-title">Event replay</h3>
+        <p class="hint">Journal events re-delivered to each consumer at startup, and live queue depth.</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Consumer</th><th class="r">Replayed</th><th class="r">Delivered</th><th class="r">Waiting</th></tr></thead>
+          <tbody id="replay"></tbody>
+        </table></div>
+      </section>
+      <section class="panel" aria-labelledby="audit-title">
+        <h3 id="audit-title">Operator audit trail</h3>
+        <div class="table-scroll"><table>
+          <thead><tr><th>When</th><th>Who</th><th>Action</th></tr></thead>
+          <tbody id="audit"></tbody>
+        </table></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const POLL_MS = 3000;
+  let last = null;
+  let lastOk = null;
+  let token = ""; // memory only: never written to storage
+
+  // ---------- helpers (all data goes through textContent) ----------
+  const fmtMoney = (v) => v == null || isNaN(v) ? "–" :
+    new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: v >= 100000 ? 0 : 2 }).format(v);
+  const fmtNum = (v, d = 2) => v == null || v === "" || isNaN(Number(v)) ? "–" :
+    Number(v).toLocaleString(undefined, { maximumFractionDigits: d });
+  const fmtTime = (iso) => {
+    if (!iso) return "–";
+    const d = new Date(iso);
+    return isNaN(d) ? String(iso) : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  };
+  function el(tag, text, attrs) {
+    const n = document.createElement(tag);
+    if (text != null) n.textContent = String(text);
+    if (attrs) for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  }
+  function row(cells) {
+    const tr = document.createElement("tr");
+    for (const c of cells) {
+      const td = document.createElement("td");
+      if (c instanceof Node) td.appendChild(c); else if (c && typeof c === "object") {
+        td.textContent = c.text; if (c.cls) td.className = c.cls;
+      } else td.textContent = c == null ? "–" : String(c);
+      tr.appendChild(td);
+    }
+    return tr;
+  }
+  function fill(tbody, rows, emptyText, cols) {
+    tbody.replaceChildren();
+    if (!rows.length) {
+      const tr = document.createElement("tr");
+      const td = el("td", emptyText, { colspan: String(cols) });
+      td.className = "empty";
+      tr.appendChild(td); tbody.appendChild(tr); return;
+    }
+    rows.forEach((r) => tbody.appendChild(r));
+  }
+  function pill(text, tone) { return el("span", text, { class: "pill", "data-tone": tone }); }
+  const ORDER_TONE = {
+    filled: "info", closed: "good", acknowledged: "info", partially_filled: "info", submitting: "warn",
+    cancel_pending: "warn", submission_unknown: "bad", reconcile_required: "bad", rejected: "bad",
+    cancelled: "", expired: "", pending: ""
+  };
+  const ORDER_LABEL = {
+    submission_unknown: "Outcome unknown", reconcile_required: "Needs reconciling", partially_filled: "Partially filled",
+    cancel_pending: "Cancelling"
+  };
+  const sentence = (s) => s ? (ORDER_LABEL[s] || (s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " "))) : "–";
+
+  const ICONS = {
+    healthy: '<svg class="status-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8" fill="var(--good)"/><path d="M5 9.3l2.6 2.5L13 6.4" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    degraded: '<svg class="status-icon" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 1.5l8 14.5H1z" fill="var(--warning)"/><path d="M9 6.5v4.2M9 13.2v.1" stroke="#0b0b0b" stroke-width="2" stroke-linecap="round"/></svg>',
+    starting: '<svg class="status-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="3 3"/></svg>',
+    failed: '<svg class="status-icon" viewBox="0 0 18 18" aria-hidden="true"><rect x="1" y="1" width="16" height="16" rx="3" fill="var(--critical)"/><path d="M6 6l6 6M12 6l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>'
+  };
+  const STATUS_WORD = { healthy: "Healthy", degraded: "Degraded", starting: "Starting", failed: "Failed" };
+
+  // ---------- render ----------
+  function renderHeader(s) {
+    const env = (s.environment && s.environment.exec_mode) || "unknown";
+    const envEl = $("env");
+    envEl.textContent = env === "live" ? "Live trading" : env === "paper" ? "Paper" : env === "simulation" ? "Simulation" : env;
+    envEl.dataset.env = env;
+    const meta = $("meta");
+    meta.replaceChildren();
+    const e = s.environment || {};
+    const commit = e.commit ? String(e.commit).slice(0, 10) + (e.dirty ? " (modified)" : "") : null;
+    [
+      e.venue && `Venue ${e.venue}${e.delta_mode ? " " + e.delta_mode : ""}`,
+      e.strategy && `Strategy ${e.strategy.name} v${e.strategy.version}`,
+      commit && `Commit ${commit}`,
+      s.uptime_seconds != null && `Up ${Math.floor(s.uptime_seconds / 3600)}h ${Math.floor((s.uptime_seconds % 3600) / 60)}m`,
+    ].filter(Boolean).forEach((t) => meta.appendChild(el("span", t)));
+    meta.appendChild(el("span", "Updated " + new Date().toLocaleTimeString(), { id: "updated" }));
+  }
+
+  function renderAspect(s) {
+    const a = $("aspect");
+    const risk = s.risk || {};
+    const breakers = Object.entries(risk.circuit_breakers || {});
+    let title, detail;
+    if (risk.kill_switch_active) {
+      title = "Stopped: kill switch engaged";
+      detail = `${risk.kill_switch_reason || "No reason recorded"}. New orders are refused until an operator resumes trading.`;
+    } else if (breakers.length) {
+      title = "Paused: an interlock is open";
+      detail = breakers.map(([k, v]) => `${k} (${v})`).join("; ") + ". Trading resumes on its own once the condition clears.";
+    } else if (risk.blocking_reason) {
+      title = "Paused: a risk limit is reached";
+      detail = `${risk.blocking_reason}. New signals are refused until the limit clears (daily limits reset at 00:00 UTC).`;
+    } else if (s.overall === "failed") {
+      title = "Not safe to trade";
+      detail = (s.components || []).filter((c) => c.status === "failed").map((c) => `${c.name}: ${c.detail}`).join("; ");
+    } else if (s.overall === "degraded") {
+      title = "Trading allowed, with warnings";
+      detail = (s.components || []).filter((c) => c.status !== "healthy").map((c) => `${c.name}: ${c.detail}`).join("; ");
+    } else {
+      title = "Clear to trade";
+      detail = "Risk governor is enforcing limits and every interlock is closed.";
+    }
+    a.dataset.state = s.overall || "unreachable";
+    $("aspect-title").textContent = title;
+    $("aspect-detail").textContent = detail;
+  }
+
+  function setMeter(id, used, limit) {
+    const m = $(id);
+    const pct = limit > 0 ? Math.max(0, Math.min(1, used / limit)) : 0;
+    m.firstElementChild.style.width = (pct * 100).toFixed(1) + "%";
+    m.dataset.level = pct >= 0.8 ? "critical" : pct >= 0.5 ? "warning" : "ok";
+    m.setAttribute("aria-valuenow", String(used));
+    m.setAttribute("aria-valuemax", String(limit));
+  }
+
+  function renderKpis(s) {
+    const acct = s.account;
+    const risk = s.risk || {};
+    const limits = risk.limits || {};
+    if (acct) {
+      $("equity-label").textContent = "Virtual equity";
+      $("equity").textContent = fmtMoney(acct.equity);
+      const r = acct.return_pct || 0;
+      const sub = $("equity-sub");
+      sub.textContent = `${r >= 0 ? "+" : ""}${r.toFixed(2)}% since start, ${fmtMoney(acct.fees_paid)} fees`;
+      sub.className = "sub " + (r > 0 ? "up" : r < 0 ? "down" : "");
+    } else {
+      $("equity-label").textContent = "Account";
+      $("equity").textContent = "Live venue";
+      $("equity-sub").textContent = "Balance is checked by the risk governor";
+    }
+    const open = (s.positions || []).length;
+    const maxPos = Number(limits.max_concurrent_positions || 0);
+    $("positions-count").textContent = maxPos ? `${open} of ${maxPos}` : String(open);
+    setMeter("positions-meter", open, maxPos);
+    $("positions-sub").textContent = open >= maxPos && maxPos ? "At the limit: new signals are refused" : "Within limit";
+
+    const pnlR = Number(risk.daily_pnl_r || 0);
+    const lossLimit = Math.abs(Number(limits.daily_loss_limit_r || 0));
+    const used = pnlR < 0 ? -pnlR : 0;
+    $("risk-used").textContent = lossLimit ? `${used.toFixed(2)}R of ${lossLimit.toFixed(0)}R` : `${used.toFixed(2)}R`;
+    setMeter("risk-meter", used, lossLimit);
+    $("risk-sub").textContent = `Today ${pnlR >= 0 ? "+" : ""}${pnlR.toFixed(2)}R across ${risk.daily_trade_count ?? 0} trades`;
+
+    const backlog = s.event_backlog ?? 0;
+    $("backlog").textContent = fmtNum(backlog, 0);
+    const bus = s.event_bus || {};
+    $("backlog-sub").textContent = bus.journal_healthy === false
+      ? `Journal down: ${bus.journal_pending} events buffered`
+      : `${fmtNum(bus.published, 0)} published, ${fmtNum(bus.duplicates_suppressed, 0)} duplicates dropped`;
+  }
+
+  function renderInterlocks(s) {
+    const ul = $("interlocks");
+    ul.replaceChildren();
+    for (const c of s.components || []) {
+      const li = document.createElement("li");
+      const icon = document.createElement("span");
+      icon.innerHTML = ICONS[c.status] || ICONS.starting; // static, trusted markup only
+      const name = el("span", `${c.name}: ${STATUS_WORD[c.status] || c.status}`, { class: "name" });
+      const detail = el("span", c.detail, { class: "detail" });
+      li.append(icon, name, detail);
+      ul.appendChild(li);
+    }
+    const b = $("breakers");
+    b.replaceChildren();
+    const risk = s.risk || {};
+    const entries = Object.entries(risk.circuit_breakers || {});
+    if (entries.length || risk.kill_switch_active || risk.error) {
+      const box = el("div", null, { class: "breakers" });
+      if (risk.error) box.appendChild(el("div", risk.error));
+      if (risk.kill_switch_active) box.appendChild(el("b", "Kill switch engaged"));
+      if (entries.length) {
+        box.appendChild(el("b", entries.length === 1 ? " One circuit breaker open" : ` ${entries.length} circuit breakers open`));
+        const list = document.createElement("ul");
+        entries.forEach(([k, v]) => list.appendChild(el("li", `${k}: ${v}`)));
+        box.appendChild(list);
+      }
+      b.appendChild(box);
+    }
+  }
+
+  function renderChart(points, initial) {
+    const svg = $("chart");
+    const wrap = $("chart-wrap");
+    svg.replaceChildren();
+    const data = (points || []).map((p) => ({ t: new Date(p.ts), v: Number(p.equity) })).filter((p) => !isNaN(p.t) && !isNaN(p.v));
+    if (data.length < 2) {
+      const fo = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      fo.setAttribute("x", "50%"); fo.setAttribute("y", "50%"); fo.setAttribute("text-anchor", "middle");
+      fo.setAttribute("fill", "var(--muted)");
+      fo.textContent = data.length ? "One sample so far. The curve appears after the next snapshot." : "No equity samples yet. The paper broker records one every minute.";
+      svg.appendChild(fo);
+      return;
+    }
+    const W = wrap.clientWidth || 800, H = 240, L = 64, R = 12, T = 10, B = 26;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const vals = data.map((d) => d.v).concat(initial != null ? [initial] : []);
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi - lo < 1) { hi += 0.5; lo -= 0.5; }
+    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    const t0 = data[0].t.getTime(), t1 = data[data.length - 1].t.getTime();
+    const x = (t) => L + ((t - t0) / Math.max(1, t1 - t0)) * (W - L - R);
+    const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+    const NS = "http://www.w3.org/2000/svg";
+    const mk = (tag, attrs, parent) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); (parent || svg).appendChild(n); return n; };
+
+    const grid = mk("g", { class: "grid" });
+    const axis = mk("g", { class: "axis" });
+    const ticks = 4;
+    for (let i = 0; i <= ticks; i++) {
+      const v = lo + ((hi - lo) * i) / ticks;
+      const yy = y(v);
+      mk("line", { x1: L, x2: W - R, y1: yy, y2: yy }, grid);
+      const t = mk("text", { x: L - 8, y: yy + 4, "text-anchor": "end" }, axis);
+      t.textContent = fmtMoney(v).replace(/\.\d+$/, "");
+    }
+    const xt = Math.max(2, Math.min(5, data.length, Math.floor((W - L - R) / 110)));
+    for (let i = 0; i < xt; i++) {
+      const tt = t0 + ((t1 - t0) * i) / Math.max(1, xt - 1);
+      const t = mk("text", { x: x(tt), y: H - 6, "text-anchor": i === 0 ? "start" : i === xt - 1 ? "end" : "middle" }, axis);
+      const span = t1 - t0;
+      const opts = span > 2 * 86400e3 ? { month: "short", day: "numeric" }
+        : span > 20 * 60e3 ? { hour: "2-digit", minute: "2-digit" }
+        : { hour: "2-digit", minute: "2-digit", second: "2-digit" };
+      t.textContent = span > 2 * 86400e3 ? new Date(tt).toLocaleDateString(undefined, opts) : new Date(tt).toLocaleTimeString(undefined, opts);
+    }
+    if (initial != null) mk("line", { class: "baseline", x1: L, x2: W - R, y1: y(initial), y2: y(initial) });
+    mk("path", { class: "line", d: data.map((d, i) => `${i ? "L" : "M"}${x(d.t.getTime()).toFixed(1)},${y(d.v).toFixed(1)}`).join("") });
+    const cross = mk("line", { class: "cross", y1: T, y2: H - B, visibility: "hidden" });
+    const dot = mk("circle", { class: "dot", r: 5, visibility: "hidden" });
+    const hit = mk("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent", tabindex: "0", "aria-label": "Equity samples; use arrow keys" });
+    const tip = $("tip");
+    let idx = data.length - 1;
+    function show(i) {
+      idx = Math.max(0, Math.min(data.length - 1, i));
+      const d = data[idx], px = x(d.t.getTime()), py = y(d.v);
+      cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("visibility", "visible");
+      dot.setAttribute("cx", px); dot.setAttribute("cy", py); dot.setAttribute("visibility", "visible");
+      tip.replaceChildren(el("b", fmtMoney(d.v)), el("span", fmtTime(d.t.toISOString())));
+      tip.hidden = false;
+      const scale = (wrap.clientWidth || W) / W;
+      const left = px * scale + 12;
+      tip.style.left = Math.min(left, (wrap.clientWidth || W) - tip.offsetWidth - 4) + "px";
+      tip.style.top = Math.max(0, py * scale - 46) + "px";
+    }
+    function hide() { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; }
+    hit.addEventListener("pointermove", (ev) => {
+      const r = svg.getBoundingClientRect();
+      const px = ((ev.clientX - r.left) / r.width) * W;
+      let best = 0, bd = Infinity;
+      data.forEach((d, i) => { const dd = Math.abs(x(d.t.getTime()) - px); if (dd < bd) { bd = dd; best = i; } });
+      show(best);
+    });
+    hit.addEventListener("pointerleave", hide);
+    hit.addEventListener("focus", () => show(idx));
+    hit.addEventListener("blur", hide);
+    hit.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowLeft") { show(idx - 1); ev.preventDefault(); }
+      if (ev.key === "ArrowRight") { show(idx + 1); ev.preventDefault(); }
+    });
+    svg.setAttribute("aria-label", `Equity from ${fmtMoney(data[0].v)} to ${fmtMoney(data[data.length - 1].v)}`);
+  }
+
+  function renderTables(s) {
+    fill($("positions"), (s.positions || []).map((p) => row([
+      p.symbol,
+      { text: fmtNum(p.size, 4), cls: "r num" },
+      { text: fmtNum(p.entry_price, 2), cls: "r num" },
+      p.has_stop_loss ? pill("Stop on venue", "good") : pill("No stop", "bad"),
+      fmtTime(p.updated_at || p.as_of),
+    ])), "No open positions.", 5);
+
+    const orders = Array.isArray(s.orders) ? s.orders : [];
+    const ordersEmpty = Array.isArray(s.orders) ? "No orders yet. They appear here as signals are executed." : `Orders unavailable: ${s.orders && s.orders.error}`;
+    fill($("orders"), orders.map((o) => row([
+      o.client_order_id, o.symbol, o.side === "buy" ? "Long" : "Short",
+      pill(sentence(o.state), ORDER_TONE[o.state] || ""),
+      { text: `${fmtNum(o.filled, 4)} / ${fmtNum(o.size, 4)}`, cls: "r num" },
+      { text: o.avg_price ? fmtNum(o.avg_price, 2) : "–", cls: "r num" },
+      o.protective === "confirmed" ? pill("Confirmed", "good")
+        : o.protective === "failed" ? pill("Failed", "bad")
+        : o.protective === "recovered" ? pill("Recovered", "warn")
+        : o.protective === "flattened" ? pill("Flattened", "warn")
+        : sentence(o.protective === "none" ? "" : o.protective),
+      o.reason || "", fmtTime(o.updated_at),
+    ])), ordersEmpty, 9);
+
+    fill($("discrepancies"), (s.discrepancies || []).map((d) => row([
+      sentence(d.kind), d.order || d.symbol || "",
+    ])), "None. Local state matches the exchange.", 2);
+
+    const subs = (s.event_bus && s.event_bus.subscribers) || {};
+    const replay = s.replay || {};
+    fill($("replay"), Object.entries(subs).map(([name, st]) => row([
+      name, { text: fmtNum(replay[name] || 0, 0), cls: "r num" },
+      { text: fmtNum(st.delivered, 0), cls: "r num" }, { text: fmtNum(st.lag, 0), cls: "r num" },
+    ])), "No consumers registered.", 4);
+
+    const audit = Array.isArray(s.audit) ? s.audit : [];
+    fill($("audit"), audit.map((a) => row([
+      fmtTime(a.at), a.actor,
+      el("span", `${a.succeeded ? sentence(a.action) : "Refused " + a.action}${a.reason ? ": " + a.reason : ""}`),
+    ])), Array.isArray(s.audit) ? "No operator actions recorded." : "Audit trail unavailable while the database is down.", 3);
+
+    const acct = $("account");
+    acct.replaceChildren();
+    const a = s.account;
+    const pairs = a ? [
+      ["Starting equity", fmtMoney(a.initial)], ["Cash", fmtMoney(a.cash)], ["Unrealised PnL", fmtMoney(a.unrealized)],
+      ["Realised PnL", fmtMoney(a.realized_pnl)], ["Fees paid", fmtMoney(a.fees_paid)], ["Funding", fmtMoney(a.funding)],
+    ] : [["Mode", "Live: balances come from the venue"]];
+    for (const [k, v] of pairs) { acct.appendChild(el("dt", k)); acct.appendChild(el("dd", v)); }
+  }
+
+  function render(s) {
+    renderHeader(s); renderAspect(s); renderKpis(s); renderInterlocks(s);
+    renderChart(s.equity_curve, s.account ? s.account.initial : null);
+    renderTables(s);
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch("/api/status", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      last = await res.json();
+      lastOk = new Date();
+      render(last);
+    } catch (err) {
+      const a = $("aspect");
+      a.dataset.state = "unreachable";
+      $("aspect-title").textContent = "Can't reach the bot";
+      $("aspect-detail").textContent = lastOk
+        ? `Showing data from ${lastOk.toLocaleTimeString()}. The process may be down or restarting (${err.message}).`
+        : `No status received yet (${err.message}). Check that the ops server is running.`;
+      const u = $("updated"); if (u) u.className = "stale";
+    } finally {
+      setTimeout(poll, POLL_MS);
+    }
+  }
+
+  // ---------- controls ----------
+  $("token").addEventListener("input", (e) => { token = e.target.value; });
+  $("resume-confirm").addEventListener("input", (e) => { $("resume").disabled = e.target.value !== "RESUME"; });
+
+  async function control(path, body, out) {
+    out.className = "result"; out.textContent = "Sending…";
+    if (!token) { out.className = "result err"; out.textContent = "Enter the operator token first."; return; }
+    try {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 202) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    } catch (err) {
+      out.className = "result err"; out.textContent = `Not done: ${err.message}`;
+      return null;
+    }
+  }
+  $("halt").addEventListener("click", async () => {
+    const out = $("halt-result");
+    const reason = $("halt-reason").value.trim();
+    if (reason.length < 3) { out.className = "result err"; out.textContent = "Add a reason so the audit trail shows why."; return; }
+    const data = await control("/api/risk/halt", { reason, operator: $("operator").value.trim() }, out);
+    if (data) {
+      out.className = data.persisted === false ? "result err" : "result ok";
+      out.textContent = data.persisted === false
+        ? "Halted in this process, but the database write failed. Use the CLI to persist it."
+        : "Trading halted. New orders are refused.";
+      poll();
+    }
+  });
+  $("resume").addEventListener("click", async () => {
+    const out = $("resume-result");
+    const reason = $("resume-reason").value.trim();
+    if (reason.length < 3) { out.className = "result err"; out.textContent = "Describe what was checked before resuming."; return; }
+    const data = await control("/api/risk/resume", { reason, confirm: $("resume-confirm").value, operator: $("operator").value.trim() }, out);
+    if (data) {
+      const open = Object.keys(data.open_circuit_breakers || {});
+      out.className = "result ok";
+      out.textContent = open.length ? `Kill switch cleared. Still blocked by: ${open.join(", ")}.` : "Kill switch cleared. Trading resumed.";
+      $("resume-confirm").value = ""; $("resume").disabled = true;
+      poll();
+    }
+  });
+
+  // ---------- theme ----------
+  $("theme").addEventListener("click", () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("signalbot-theme", root.dataset.theme); } catch (_) {}
+    if (last) renderChart(last.equity_curve, last.account ? last.account.initial : null);
+  });
+  try { const t = localStorage.getItem("signalbot-theme"); if (t) document.documentElement.dataset.theme = t; } catch (_) {}
+  addEventListener("resize", () => { if (last) renderChart(last.equity_curve, last.account ? last.account.initial : null); });
+
+  poll();
+})();
+</script>
+</body>
+</html>

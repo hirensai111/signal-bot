@@ -1,0 +1,174 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege. Pull-request jobs never receive repository secrets: this workflow
+# uses the `pull_request` event (not `pull_request_target`) and references no secrets.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Explicitly blank credentials: tests must never reach a real exchange or chat.
+  EXEC_MODE: paper
+  DELTA_MODE: testnet
+  DELTA_API_KEY: ""
+  DELTA_API_SECRET: ""
+  BINANCE_API_KEY: ""
+  BINANCE_API_SECRET: ""
+  TELEGRAM_BOT_TOKEN: ""
+  TELEGRAM_CHAT_ID: ""
+  OPERATOR_TOKEN: ""
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "ruff==0.17.3"
+      - run: ruff check --output-format=github .
+      - run: ruff format --check .
+
+  unit:
+    name: Unit and scenario tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: Unit, failure-scenario and replay tests (SQLite)
+        run: pytest -q -m "not postgres" --junitxml=junit-${{ matrix.python }}.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-${{ matrix.python }}
+          path: junit-${{ matrix.python }}.xml
+
+  postgres:
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: signalbot
+          POSTGRES_PASSWORD: signalbot
+          POSTGRES_DB: signalbot_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U signalbot"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_POSTGRES_URL: postgresql+asyncpg://signalbot:signalbot@localhost:5432/signalbot_test
+      SCENARIO_DB_URL: postgresql+asyncpg://signalbot:signalbot@localhost:5432/signalbot_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: Postgres-specific tests
+        run: pytest -q -m postgres
+      - name: Execution and failure scenarios on PostgreSQL
+        run: >-
+          pytest -q tests/scenarios tests/test_execution_engine.py tests/test_reconciliation.py
+          tests/test_outcome_monitor.py tests/test_order_state_machine.py
+
+  replay:
+    name: Deterministic replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: Replay tests
+        run: pytest -q -m replay
+      - name: Same inputs produce the same report twice
+        run: |
+          for run in a b; do
+            signal-bot-research run \
+              --config signal_bot/research/strategies/exhaustion_reversion.toml \
+              --source synthetic --symbols AAAUSDT,BBBUSDT --seed 7 --bars 20000 --out "replay-$run"
+          done
+          python scripts/compare_reports.py replay-a replay-b
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-report
+          path: replay-a/
+
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit
+      - name: Audit runtime dependencies
+        run: pip-audit --strict --progress-spinner off .
+
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - name: Wheel contains the control room and strategy configs
+        run: |
+          python - <<'EOF'
+          import glob, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          for needed in ("signal_bot/observability/static/control_room.html",
+                         "signal_bot/research/strategies/liquidity_sweep.toml",
+                         "signal_bot/venues/paper.py"):
+              assert needed in names, needed
+          print("ok")
+          EOF

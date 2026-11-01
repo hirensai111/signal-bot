@@ -197,9 +197,7 @@ async def test_long_missing_volume_spike() -> None:
     detector = SweepDetector(asyncio.Queue(), session_factory=TestSessionLocal)
 
     async with TestSessionLocal() as session:
-        current_time = await _seed_base_scenario(
-            session, sweep_cvd=Decimal("-5")
-        )
+        current_time = await _seed_base_scenario(session, sweep_cvd=Decimal("-5"))
 
     # Patch sweep feature to low volume
     async with TestSessionLocal() as session:
@@ -226,7 +224,8 @@ async def test_long_missing_cvd_divergence() -> None:
 
     async with TestSessionLocal() as session:
         current_time = await _seed_base_scenario(
-            session, sweep_cvd=Decimal("-15")  # more negative than prior -10
+            session,
+            sweep_cvd=Decimal("-15"),  # more negative than prior -10
         )
 
     current = _kline(open_time=current_time, close_p=100.0)

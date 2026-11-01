@@ -1,84 +1,87 @@
 # Signal Bot
 
-Personal crypto futures scalping signal bot with automated execution on Delta Exchange India.
+A fault-tolerant, event-driven crypto-futures trading platform. It researches
+strategies on replayed history, paper-trades them against live order books,
+executes on Delta Exchange India behind a fail-closed risk governor, and recovers
+safely from infrastructure failures.
 
-## Quick Start
+The point is the engineering, not a profitability claim: live data, money-moving
+side effects, asynchronous processing and partial failures, each handled
+deliberately and each proven by an automated test.
 
-1. Copy `.env.example` to `.env` and fill in your credentials.
-2. Install dependencies: `pip install -e ".[dev]"`
-3. Run tests: `pytest tests/`
-4. Start the bot: `python -m signal_bot.main`
+| | |
+|---|---|
+| Execution | Persistent order state machine; `submission_unknown` resolved by client-id lookup and never resubmitted; protective stop verified after every fill |
+| Events | Typed events with deterministic ids, journaled in PostgreSQL before delivery, a queue per consumer, checkpoints and replay |
+| Risk | Persisted kill switch, worst-case daily loss budget, circuit breakers for stream, auth, unresolved-order and orphan-exposure conditions; fails closed |
+| Testing | 9 failure scenarios run end to end against a fault-injecting exchange, on SQLite and PostgreSQL |
+| Paper trading | Fills from live Delta order books with latency, depth, fees, funding and a persisted ledger |
+| Research | Deterministic fill model, IS/OOS, walk-forward, cost sensitivity, random-entry baselines, versioned JSON/HTML reports |
+| Operations | JSON logs with correlation ids, Prometheus metrics and alerts, Grafana dashboard, control room with an authenticated halt control and audit trail |
 
-## Architecture
-
-| Layer | Module | Responsibility |
-|-------|--------|----------------|
-| Ingest | `ingest/binance_ws.py` | WebSocket + REST backfill for Binance klines & aggTrades |
-| Storage | `storage/writer.py` | Batched DB inserts + closed-candle fan-out |
-| Features | `features/htf_levels.py` | Swing high/low detection on 1h/4h |
-| Features | `features/microstructure.py` | CVD, volume z-score, ratio per candle |
-| Signals | `signals/sweep_detector.py` | 4-confluence sweep setup detection |
-| Signals | `signals/risk_sizer.py` | Position sizing & leverage capping |
-| Delivery | `delivery/telegram_bot.py` | Signal alerts & status command |
-| Tracking | `tracking/outcome_monitor.py` | SL/TP fill monitoring & daily summary |
-| Execution | `delta/client.py` | Delta Exchange India REST + WebSocket wrapper |
-| Backtest | `backtest/runner.py` | Historical replay with cost model |
-
-## Delta Exchange India Client
-
-The `delta/client.py` module provides:
-
-- **REST API** with HMAC-SHA256 request signing
-- **WebSocket** private channel (positions + orders) with auto-reconnect
-- **Symbol mapping** between Binance (`BTCUSDT`) and Delta (`BTCUSD`) symbols
-- **Bracket order** placement with embedded SL/TP
-
-### Environment Variables
+## Quick start
 
 ```bash
-DELTA_MODE=testnet          # "testnet" or "production"
-DELTA_API_KEY=your_key
-DELTA_API_SECRET=your_secret
+pip install -e ".[dev]"
+pytest -q                                   # unit + failure scenarios + replay (SQLite)
+python scripts/control_room_demo.py         # full stack on a synthetic market: http://127.0.0.1:8081
 ```
 
-### CLI Sanity Check
+Paper trading with Docker (PostgreSQL, Prometheus, Grafana):
 
 ```bash
-python -m signal_bot.delta.client --check
+cp .env.example .env    # set OPERATOR_TOKEN
+SIGNAL_BOT_COMMIT=$(git rev-parse HEAD) docker compose up --build
 ```
 
-### Usage Example
+* Control room: <http://127.0.0.1:8080>
+* Grafana: <http://127.0.0.1:3000>
+* Prometheus: <http://127.0.0.1:9090>
 
-```python
-import asyncio
-from signal_bot.delta.client import DeltaClient
+Without Docker: `EXEC_MODE=paper signal-bot` (needs `DATABASE_URL`).
 
-async def main():
-    async with DeltaClient() as client:
-        await client.symbol_map.load()
-        balance = await client.get_balance()
-        positions = await client.get_open_positions()
-        print(balance, positions)
+Live trading needs `EXEC_MODE=live`, Delta credentials and, for production, the go-live
+checklist in [docs/runbook.md](docs/runbook.md) (the bot refuses to start without
+`LIVE_TRADING_ACKNOWLEDGED=true`).
 
-asyncio.run(main())
-```
+## Layout
 
-## Configuration
+| Path | Responsibility |
+|---|---|
+| `signal_bot/ingest`, `storage/writer.py` | Binance backfill and streams; persist, then fan out closed candles per subscriber |
+| `signal_bot/features`, `signals` | HTF levels, microstructure (CVD, volume), sweep detection, sizing |
+| `signal_bot/events` | Event contract, bus, journal, replay |
+| `signal_bot/execution` | Adapter interface, Delta adapter, order state machine, execution engine |
+| `signal_bot/venues` | Fault-injecting simulator, paper broker |
+| `signal_bot/risk/governor.py` | Kill switch, limits, circuit breakers, operator CLI |
+| `signal_bot/tracking` | Outcome monitor (signal vs execution quality), reconciler |
+| `signal_bot/observability` | Logs, metrics, status, ops server, control room |
+| `signal_bot/research` | Data, fill model, strategies, validation, reports |
+| `tests/scenarios` | End-to-end failure scenarios |
+| `deploy/` | Prometheus, alerts, Grafana |
 
-All settings are loaded from `.env` via `pydantic-settings`.
+## Documentation
 
-See `config.py` for the full list of environment variables.
+* [Architecture](docs/architecture.md): event contract, order state machine, safety properties
+* [Failure scenarios](docs/failure-scenarios.md): each scenario mapped to the test that proves it
+* [Research](docs/research.md): reproducibility, fill model, validation criteria
+* [Runbook](docs/runbook.md): modes, go-live checklist, halting, alerts, tracing a trade
+* [Reports](docs/reports/): published research reports (JSON and HTML)
 
-## Testing
+## Development
 
 ```bash
-# Run only Delta client tests (no PostgreSQL required)
-pytest tests/test_delta_client.py -v
-
-# Run all tests (requires PostgreSQL running)
-pytest tests/ -v
+ruff check . && ruff format --check .
+pytest -q -m "not postgres"
+TEST_POSTGRES_URL=postgresql+asyncpg://u:p@localhost/signalbot_test pytest -q -m postgres
+SCENARIO_DB_URL=$TEST_POSTGRES_URL pytest -q tests/scenarios     # scenarios on PostgreSQL
 ```
+
+CI (`.github/workflows/ci.yml`) runs lint, format, unit tests on Python 3.11–3.13,
+PostgreSQL integration, a deterministic replay check, `pip-audit` and a wheel build.
+Pull-request jobs get read-only permissions and no secrets. Tagged releases publish a
+manifest that ties the version to its commit and strategy config hashes.
 
 ## License
 
-Private — for personal use only.
+Private, for personal use only.
