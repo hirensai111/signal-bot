@@ -68,6 +68,12 @@ def num(x: Any, d: int = 2, signed: bool = False, suffix: str = "") -> str:
     return s + suffix
 
 
+def money(x: Any) -> str:
+    if x is None:
+        return "–"
+    return f"-${abs(float(x)):,.2f}" if float(x) < 0 else f"${float(x):,.2f}"
+
+
 def cls(x: Any) -> str:
     if x is None:
         return ""
@@ -183,7 +189,7 @@ def render_html(report: dict[str, Any]) -> str:
     parts = [
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
-        f"<title>{esc(s['name'])} research report</title>"
+        f"<title>{esc(str(s['name']).replace('_', ' ').capitalize())} research report</title>"
         '<link rel=preconnect href="https://fonts.googleapis.com"><link rel=preconnect href="https://fonts.gstatic.com" crossorigin>'
         '<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@600;700&display=swap" rel=stylesheet>'
         f"<style>{CSS}</style></head><body><div class=page>",
@@ -305,8 +311,8 @@ def render_html(report: dict[str, Any]) -> str:
         parts.append(
             f"<tr><td>{esc(r['symbol'])}</td><td class=r>{num((e['fill_ratio_qty'] or 0) * 100, 1, suffix='%')}</td>"
             f"<td class=r>{esc(e['no_fill_gap'])}</td><td class=r>{esc(e['no_fill_liquidity'])}</td><td class=r>{esc(e['partial_fills'])}</td>"
-            f"<td class=r>${num(e['fees'])}</td><td class=r>${num(e['spread_cost'])}</td><td class=r>${num(e['slippage_impact_cost'])}</td>"
-            f"<td class=r>${num(e['funding'])}</td><td class=r>{num(e['execution_drag_r'], 3, suffix='R')}</td></tr>"
+            f"<td class=r>{money(e['fees'])}</td><td class=r>{money(e['spread_cost'])}</td><td class=r>{money(e['slippage_impact_cost'])}</td>"
+            f"<td class=r>{money(e['funding'])}</td><td class=r>{num(e['execution_drag_r'], 3, suffix='R')}</td></tr>"
         )
     parts.append("</tbody></table></div>")
 
