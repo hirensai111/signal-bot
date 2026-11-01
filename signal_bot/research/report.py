@@ -138,6 +138,7 @@ def line_chart(
         out.append(
             f'<line class="zero" x1="{L}" x2="{width - R}" y1="{Y(zero):.1f}" y2="{Y(zero):.1f}"/>'
         )
+    ends = []
     for k, (name, data) in enumerate(pts):
         color = SERIES[k % len(SERIES)]
         d = "".join(f"{'L' if j else 'M'}{X(x):.1f},{Y(y):.1f}" for j, (x, y) in enumerate(data))
@@ -149,9 +150,13 @@ def line_chart(
                     f"<title>{esc(name)}: {esc(y_fmt(y))} at {x}x costs</title></circle>"
                 )
         lx, ly = data[-1]
-        out.append(
-            f'<text class="label" x="{X(lx) + 8:.1f}" y="{Y(ly) + 4:.1f}">{esc(name)} {esc(y_fmt(ly))}</text>'
-        )
+        ends.append([Y(ly), X(lx), f"{name} {y_fmt(ly)}"])
+    # Direct labels at line ends, nudged apart so close finishes stay readable.
+    ends.sort()
+    for i in range(1, len(ends)):
+        ends[i][0] = max(ends[i][0], ends[i - 1][0] + 15)
+    for y, x, text in ends:
+        out.append(f'<text class="label" x="{x + 8:.1f}" y="{y + 4:.1f}">{esc(text)}</text>')
     out.append("</svg>")
     legend = "".join(
         f'<span><i style="background:{SERIES[k % len(SERIES)]}"></i>{esc(n)}</span>'
@@ -182,7 +187,8 @@ def render_html(report: dict[str, Any]) -> str:
         '<link rel=preconnect href="https://fonts.googleapis.com"><link rel=preconnect href="https://fonts.gstatic.com" crossorigin>'
         '<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@600;700&display=swap" rel=stylesheet>'
         f"<style>{CSS}</style></head><body><div class=page>",
-        f"<h1>{esc(s['name'])} <span class=badge>v{esc(s['version'])}</span></h1>",
+        f"<h1>{esc(str(s['name']).replace('_', ' ').capitalize())} "
+        f"<span class=badge>v{esc(s['version'])}</span></h1>",
         f"<p class=lede>{esc(s.get('description') or '')}</p>",
         f"<p class=note>{esc(', '.join(s['symbols']))} on {esc(s['timeframe'])} bars. "
         f"Report {esc(report['report_id'])}, config {esc(s['config_hash'])}, "
