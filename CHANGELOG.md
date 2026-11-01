@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Research
+- The fill model supports constant-distance trailing stops, matching Delta's `bracket_trail_amount`.
+- New strategies: `trend_breakout`, a 4h Donchian breakout with EMA200 and volume filters and a trailing stop, and `liquidity_sweep_v2`, the production sweep entries with a minimum stop distance and re-set targets.
+- `scripts/research_dev.py` (development data only, every run logged) and `scripts/research_holdout.py` (a committed config only; every holdout look counted); the `validation.evaluation_start` warm-up.
+- Results are in `docs/research.md`. Trend breakout 0.2.0 is not validated: +0.10R per trade across 11 coins in the holdout year (not significant), against −0.26R for the production sweep. Sweep v2 is dropped.
+
 ## 2.0.1
 
 ### Fixed (Delta Exchange India API alignment, per docs.delta.exchange)

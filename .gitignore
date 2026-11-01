@@ -23,5 +23,5 @@ data/cache/
 
 # Signal Bot 2.0 runtime data and generated reports (published reports live in docs/reports)
 data/
-reports/
+/reports/
 replay-*/

@@ -122,3 +122,76 @@ What the reports show:
   rather than signal generation: post-only (maker) entries, a minimum stop distance
   measured in multiples of round-trip cost, and wider structural stops. Each is a config
   change that the same pipeline can validate.
+
+## Strategy iteration (November 2026)
+
+### Why the production strategy loses
+
+* **80% of sweep trades stop out.** The median target sits 3.6–4.8R away (the next HTF level), so few trades reach it.
+* **Stops are very tight.** 28–40% of stops are under 25 bps from entry, which puts round-trip taker fees and spread at 0.2–0.4R per trade.
+* **The entry has no direction.** Signal R, measured before costs at the intended levels, is indistinguishable from zero.
+
+### Method
+
+| Rule | How it was applied |
+|---|---|
+| Development and holdout split | Ideas were tried only on **2021-01 to 2025-09** (`scripts/research_dev.py` refuses later dates). **2025-10 to 2026-09** was held back. |
+| Every variant is on record | `docs/research-log.jsonl` holds every development run, including the bad ones: 19 trend-breakout variants and 2 sweep v2 variants. |
+| Pre-registration | The chosen config was committed and pushed (`6234af6`) before the holdout was run. `scripts/research_holdout.py` refuses a config with uncommitted changes and counts each look at the holdout. |
+| Choosing a variant | The pick was the centre of a parameter plateau, not the best single run. Neighbours were tested: volume threshold 1.25/2.0×, channel 40/70 bars, EMA 100/300. All were positive on every development symbol. |
+| Warm-up | Holdout runs load bars from 2025-07 to warm up indicators, but trade and measure only from 2025-10 (`validation.evaluation_start`). |
+
+### Candidates
+
+* **Sweep v2** (`liquidity_sweep_v2.toml`): the production entries, skipping stops under 40 bps, with a 2R target.
+  * Development (2024-07 to 2025-09): −0.06 / −0.18 / −0.15R per trade.
+  * A 60 bps minimum stop with a 2R trailing exit: −0.14 / −0.11 / −0.06R.
+  * Signal R stayed near zero (|t| < 1) under every exit tried, so there is no edge to manage. It was dropped without using the holdout.
+* **Trend breakout 0.2.0** (`trend_breakout.toml`): long or short only in the direction of the EMA200, and only on 1.5× average volume.
+  * 4h Donchian 55 breakout, 2 ATR initial stop, 3 ATR trailing stop, no target.
+  * The trailing stop is constant-distance, which is what Delta's `bracket_trail_amount` places on the exchange.
+
+### Trend breakout 0.2.0 results
+
+Risk is 0.5% of equity per trade. R is net of every modelled cost.
+
+| Data | Trades | R per trade | Coins positive | Average net return per coin |
+|---|---|---|---|---|
+| Development, BTC/ETH/SOL (used for the choices) | 478 | +0.13 | 3 / 3 | +10.1% over 4.75 years |
+| Development, 8 coins never used for the choices: XRP, DOGE, BNB, ADA, LINK, LTC, AVAX, DOT | 1284 | +0.05 | 6 / 8 | +4.3% over 4.75 years |
+| **Holdout year, BTC/ETH/SOL** (look 1) | 109 | −0.02 | 1 / 3 | −0.4% |
+| **Holdout year, the 8 unseen coins** (look 2, config unchanged) | 272 | +0.15 | 6 / 8 | +2.6% |
+| **Holdout year, all 11 coins** | 381 | **+0.10** (95% CI −0.05 to +0.26, t = 1.3) | 7 / 11 | +1.8% |
+| *Production sweep, holdout year, BTC/ETH/SOL* | 584 | *−0.26* | *0 / 3* | *−23%* |
+
+The holdout year was a bear market: buy-and-hold lost 24–69% on these coins.
+
+Reports:
+
+* [BTC/ETH/SOL holdout](reports/trend_breakout-v0.2.0-e3bbba552778704c.html)
+* [Unseen-coin holdout](reports/trend_breakout-v0.2.0-caf2c79e29364b34.html)
+
+### What this does and does not show
+
+* **Costs no longer decide the outcome.**
+  * Execution drag is 0.06–0.11R per trade on BTC/ETH/SOL and up to 0.40R on thinner coins, against 0.28–0.39R for the production sweep.
+  * On every coin where it is positive in the holdout (7 of 11), it stays positive at 3× costs.
+* **The result is much less bad than production, and possibly a small edge.**
+  * The same frozen rules lost nothing over the holdout year, against −0.26R per trade for production.
+  * They made money on 7 of 11 coins.
+* **It is not validated.**
+  * The pooled holdout result is not statistically significant: the 95% interval includes zero.
+  * Per symbol, the strict criteria fail. Only DOT beats the 95th percentile of random entries.
+  * BTC/ETH/SOL, the coins it was tuned on, were flat in the holdout. That is the shrinkage expected after choosing among 19 variants.
+* **The holdout year is now used up.**
+  * It has been looked at twice: once per coin set, with the same frozen config.
+  * Any further change has to be judged on data that does not exist yet, which means forward paper trading.
+
+### Next step
+
+Run trend breakout 0.2.0 as a small, diversified **paper** portfolio across the liquid Delta perpetuals. That needs:
+
+* a 4h signal generator;
+* trailing-stop support in the paper broker and the Delta bracket (`bracket_trail_amount`).
+
+Go live only if a few months of paper results confirm a positive expectancy at the costs the session reports measure.
