@@ -87,3 +87,34 @@ how many candidates each rule removed.
 categories from the bot's database: realised performance and execution quality from
 `trade_results`, and reliability from the event journal (stream outages and recovery
 times, discrepancies, unknown submissions, protective failures, halts).
+
+## Results: October 2025 to September 2026 (BTC, ETH, SOL)
+
+Twelve months of Binance USD-M 1m data per symbol (525,600 bars each, 100% coverage,
+no gaps). Reports are in [docs/reports](reports/). Each JSON file is the record and
+pins the code commit, config hash and data snapshot ids.
+
+| Strategy | Verdict | Trades (full year) | Signal R before costs (t-stat) | Realised R after costs | Net return | Break-even cost multiple |
+|---|---|---|---|---|---|---|
+| Liquidity sweep (production, live modules) | Not validated | 186 / 215 / 183 | −0.01 (−0.1) / +0.12 (0.8) / +0.11 (0.5) | −0.40 / −0.16 / −0.23 | −32% / −17% / −20% | 0x / 0.44x / 0.32x |
+| Exhaustion reversion + regime filter | Not validated | 316 / 461 / 475 | −0.02 / −0.03 / −0.06 | −0.28 / −0.26 / −0.30 | −36% / −46% / −51% | 0x |
+| Exhaustion reversion, unfiltered | Not validated | 387 / 559 / 581 | −0.02 / −0.05 / −0.03 | −0.28 / −0.28 / −0.26 | −42% / −54% / −53% | 0x |
+
+(BTC / ETH / SOL; 0.5% of equity risked per trade.)
+
+What the reports show:
+
+* **The production strategy has no edge that survives costs.** Its signal edge at the
+  intended levels is small and not statistically distinguishable from zero (every 95%
+  interval spans zero). Execution costs take 0.28–0.39R per trade, mostly taker fees
+  against median stops of only 35–53 bps. ETH and SOL would need costs below about
+  0.3–0.45x today's to break even.
+* **In-sample results flatter.** The sweep's ETH signal R was +0.25R in sample and −0.22R
+  out of sample, and SOL's was +0.39R and −0.42R. A single backtest on the full period
+  would have hidden this.
+* **The regime filter removes 18–20% of exhaustion trades** and cuts the losses
+  (BTC −36% vs −42%, ETH −46% vs −54%) but creates no edge.
+* **Neither strategy should trade live.** The obvious next experiments target execution
+  rather than signal generation: post-only (maker) entries, a minimum stop distance
+  measured in multiples of round-trip cost, and wider structural stops. Each is a config
+  change that the same pipeline can validate.
