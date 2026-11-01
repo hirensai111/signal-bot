@@ -71,6 +71,10 @@ async def governor() -> AsyncGenerator[RiskGovernor, None]:
 # ---------------------------------------------------------------------------
 
 
+def _utc_today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
 async def _seed_risk_state(session: AsyncSession, **kwargs) -> RiskState:
     existing = await session.get(RiskState, 1)
     if existing:
@@ -152,11 +156,9 @@ async def test_max_consecutive_losses_blocks(governor: RiskGovernor, db_session:
 @pytest.mark.asyncio
 async def test_min_balance_blocks(governor: RiskGovernor, db_session: AsyncSession):
     await _seed_risk_state(db_session)
-    delta_client = MagicMock()
-    delta_client.get_balance = AsyncMock(
-        return_value={"balances": [{"asset": "USDT", "available_balance": "10.0"}]}
-    )
-    governor.delta_client = delta_client
+    exchange = MagicMock()
+    exchange.available_balance = AsyncMock(return_value=Decimal("10.0"))
+    governor.exchange = exchange
     allowed, reason = await governor.check(None)
     assert not allowed
     assert "min_balance_usdt" in reason
@@ -183,7 +185,8 @@ async def test_win_resets_consecutive_losses(governor: RiskGovernor, db_session:
     state = await db_session.get(RiskState, 1)
     assert state.consecutive_losses == 0
     assert state.daily_pnl_r == Decimal("2.0")
-    assert state.daily_trade_count == 3
+    # trades are counted at submission (record_submission), not on close
+    assert state.daily_trade_count == 2
 
 
 @pytest.mark.asyncio
@@ -194,7 +197,7 @@ async def test_loss_increments_streak(governor: RiskGovernor, db_session: AsyncS
     state = await db_session.get(RiskState, 1)
     assert state.consecutive_losses == 3
     assert state.daily_pnl_r == Decimal("-1.0")
-    assert state.daily_trade_count == 2
+    assert state.daily_trade_count == 1
 
 
 @pytest.mark.asyncio
@@ -221,14 +224,14 @@ async def test_daily_reset_zeros_counters(governor: RiskGovernor, db_session: As
         daily_pnl_r=Decimal("-5.0"),
         daily_trade_count=7,
         consecutive_losses=3,
-        last_reset_date=date.today() - timedelta(days=1),
+        last_reset_date=_utc_today() - timedelta(days=1),
     )
     await governor._do_daily_reset()
     state = await db_session.get(RiskState, 1)
     assert state.daily_pnl_r == Decimal("0")
     assert state.daily_trade_count == 0
     assert state.consecutive_losses == 0
-    assert state.last_reset_date == date.today()
+    assert state.last_reset_date == _utc_today()
 
 
 @pytest.mark.asyncio
@@ -238,7 +241,7 @@ async def test_daily_reset_preserves_kill_switch(governor: RiskGovernor, db_sess
         kill_switch_active=True,
         kill_switch_reason="manual",
         daily_pnl_r=Decimal("-5.0"),
-        last_reset_date=date.today() - timedelta(days=1),
+        last_reset_date=_utc_today() - timedelta(days=1),
     )
     await governor._do_daily_reset()
     state = await db_session.get(RiskState, 1)
@@ -295,3 +298,106 @@ async def test_alert_rate_limit(governor: RiskGovernor, db_session: AsyncSession
     past = datetime.now(timezone.utc) - timedelta(hours=2)
     governor._alert_cooldown["kill_switch_active"] = past
     assert governor._should_alert("kill_switch_active: reason3") is True
+
+
+# ---------------------------------------------------------------------------
+# 6. Signal Bot 2.0: fail-closed behaviour, breakers, submission counting
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_submission_counts_trades(governor: RiskGovernor, db_session: AsyncSession):
+    await _seed_risk_state(db_session, daily_trade_count=9)
+    await governor.record_submission(uuid.uuid4())
+    allowed, reason = await governor.check(None)
+    assert not allowed and "max_trades_per_day" in reason
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_blocks_until_cleared(governor: RiskGovernor, db_session):
+    await _seed_risk_state(db_session)
+    governor.set_breaker("exchange_stream_down", "ws disconnected")
+    allowed, reason = await governor.check(None)
+    assert not allowed and "exchange_stream_down" in reason
+    assert governor.gate_open()[0] is False
+    governor.clear_breaker("exchange_stream_down")
+    assert (await governor.check(None))[0] is True
+    assert governor.gate_open() == (True, None)
+
+
+@pytest.mark.asyncio
+async def test_state_store_failure_fails_closed_and_marks_unhealthy():
+    class BrokenSession:
+        async def __aenter__(self):
+            raise ConnectionError("database is down")
+
+        async def __aexit__(self, *a):
+            return False
+
+    gov = RiskGovernor(session_factory=lambda: BrokenSession(), exchange=None)
+    allowed, reason = await gov.check(None)
+    assert not allowed and reason == "risk_state_unavailable"
+    assert gov.healthy is False
+    assert gov.gate_open()[0] is False
+
+
+@pytest.mark.asyncio
+async def test_balance_error_fails_closed(governor: RiskGovernor, db_session: AsyncSession):
+    await _seed_risk_state(db_session)
+    exchange = MagicMock()
+    exchange.available_balance = AsyncMock(side_effect=TimeoutError("venue slow"))
+    governor.exchange = exchange
+    allowed, reason = await governor.check(None)
+    assert not allowed and reason == "balance_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_missed_midnight_rolls_counters(governor: RiskGovernor, db_session: AsyncSession):
+    await _seed_risk_state(
+        db_session,
+        daily_pnl_r=Decimal("-5"),
+        daily_trade_count=10,
+        last_reset_date=_utc_today() - timedelta(days=2),
+    )
+    allowed, reason = await governor.check(None)
+    assert allowed, reason
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_engages_in_memory_even_if_db_write_fails():
+    class BrokenSession:
+        async def __aenter__(self):
+            raise ConnectionError("database is down")
+
+        async def __aexit__(self, *a):
+            return False
+
+    gov = RiskGovernor(session_factory=lambda: BrokenSession())
+    with pytest.raises(ConnectionError):
+        await gov.set_kill_switch("protective order failed")
+    assert gov.gate_open()[0] is False
+
+
+@pytest.mark.asyncio
+async def test_submitted_and_unknown_orders_count_as_exposure(governor, db_session):
+    await _seed_risk_state(db_session)
+    for status in ("submitted", "submission_unknown", "triggered"):
+        await _seed_signal(db_session, status=status)
+    allowed, reason = await governor.check(None)
+    assert not allowed and "max_concurrent_positions" in reason
+
+
+@pytest.mark.asyncio
+async def test_open_risk_counts_against_daily_loss_budget(governor, db_session):
+    """-1.5R realised + one open trade + the new one = -3.5R worst case > -3R budget."""
+    await _seed_risk_state(db_session, daily_pnl_r=Decimal("-1.5"))
+    await _seed_signal(db_session, status="triggered")
+    allowed, reason = await governor.check(None)
+    assert not allowed and reason.startswith("daily_loss_budget")
+
+
+@pytest.mark.asyncio
+async def test_daily_loss_budget_allows_when_room_remains(governor, db_session):
+    await _seed_risk_state(db_session, daily_pnl_r=Decimal("-1.0"))
+    await _seed_signal(db_session, status="triggered")
+    assert (await governor.check(None))[0] is True  # -1 - 2 = -3, not beyond -3

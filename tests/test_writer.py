@@ -138,6 +138,7 @@ async def test_writer_emits_closed_candle_events() -> None:
         batch_size=10,
     )
 
+    candles = writer.subscribe("test")
     await queue.put(_kline(interval="1m", closed=True))
     await queue.put(_kline(interval="1m", closed=False))
 
@@ -147,8 +148,8 @@ async def test_writer_emits_closed_candle_events() -> None:
     await task
 
     # Only the closed candle should be emitted
-    assert writer.closed_candle_queue.qsize() == 1
-    event = await writer.closed_candle_queue.get()
+    assert candles.qsize() == 1
+    event = await candles.get()
     assert isinstance(event, Kline)
     assert event.closed is True
 
@@ -163,6 +164,7 @@ async def test_writer_routes_htf_candles_to_event_queue_not_db() -> None:
         batch_size=10,
     )
 
+    candles = writer.subscribe("test")
     await queue.put(_kline(interval="1h", closed=True))
     await queue.put(_kline(interval="4h", closed=True))
 
@@ -171,7 +173,7 @@ async def test_writer_routes_htf_candles_to_event_queue_not_db() -> None:
     writer.shutdown()
     await task
 
-    assert writer.closed_candle_queue.qsize() == 2
+    assert candles.qsize() == 2
 
     async with TestSessionLocal() as session:
         assert len((await session.execute(select(Candle1m))).scalars().all()) == 0

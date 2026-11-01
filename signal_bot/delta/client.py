@@ -120,6 +120,7 @@ class DeltaClient:
         api_key: str | None = None,
         api_secret: str | None = None,
         mode: str | None = None,
+        request_timeout: float = 10.0,
     ):
         self.api_key = (api_key or settings.delta_api_key or "").strip()
         self.api_secret = (api_secret or settings.delta_api_secret or "").strip()
@@ -129,6 +130,9 @@ class DeltaClient:
         self.rest_url = ENDPOINTS[self.mode]["rest"]
         self.ws_url = ENDPOINTS[self.mode]["ws"]
         self.symbol_map = DeltaSymbolMap(self)
+        # Bounded timeouts: an order placement that hangs for aiohttp's default
+        # 5 minutes is indistinguishable from a lost order.
+        self.request_timeout = request_timeout
         self._session: aiohttp.ClientSession | None = None
         self._products_cache: list[dict] | None = None
 
@@ -137,7 +141,9 @@ class DeltaClient:
     # ------------------------------------------------------------------
     async def initialize(self) -> None:
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.request_timeout)
+            )
         await self.symbol_map.load()
 
     async def close(self) -> None:
@@ -361,6 +367,36 @@ class DeltaClient:
     async def get_order_status(self, order_id: str) -> dict:
         return await self._request("GET", f"/v2/orders/{order_id}")
 
+    async def get_order_by_client_id(self, client_order_id: str) -> dict:
+        """Look up an order by our deterministic client_order_id (open or historical)."""
+        return await self._request("GET", f"/v2/orders/client_order_id/{client_order_id}")
+
+    async def get_fills(self, product_id: int | None = None, page_size: int = 50) -> dict:
+        params: dict[str, Any] = {"page_size": page_size}
+        if product_id is not None:
+            params["product_ids"] = product_id
+        return await self._request("GET", "/v2/fills", params=params)
+
+    async def place_order(self, body: dict[str, Any]) -> dict:
+        return await self._request("POST", "/v2/orders", data=body)
+
+    async def attach_position_bracket(
+        self, product_id: int, stop_loss_price: Decimal, take_profit_price: Decimal | None = None
+    ) -> dict:
+        """Attach SL (and optional TP) to an existing position (recovery procedure)."""
+        body: dict[str, Any] = {
+            "product_id": product_id,
+            "stop_loss_order": {"order_type": "market_order", "stop_price": str(stop_loss_price)},
+            "bracket_stop_trigger_method": "last_traded_price",
+        }
+        if take_profit_price is not None:
+            body["take_profit_order"] = {
+                "order_type": "limit_order",
+                "stop_price": str(take_profit_price),
+                "limit_price": str(take_profit_price),
+            }
+        return await self._request("POST", "/v2/orders/bracket", data=body)
+
     async def place_market_close(self, symbol: str, product_id: int) -> dict:
         """Close an open position with a reduce-only market order."""
         positions_resp = await self.get_open_positions(product_id=product_id)
@@ -441,13 +477,26 @@ class DeltaWebSocket:
     def __init__(
         self,
         client: DeltaClient,
-        delta_events: asyncio.Queue,
+        delta_events,
+        on_connect=None,
+        on_disconnect=None,
+        heartbeat: float = 20.0,
     ):
+        """*delta_events* is an ``asyncio.Queue`` (raw messages) or an async callable.
+
+        ``on_connect`` / ``on_disconnect`` are async callbacks; the execution layer
+        uses them to block trading while the private stream is down and to
+        reconcile before resuming.
+        """
         self.client = client
         self.delta_events = delta_events
+        self.on_connect = on_connect
+        self.on_disconnect = on_disconnect
+        self.heartbeat = heartbeat
         self._ws_url = client.ws_url
         self._running = False
         self._task: asyncio.Task | None = None
+        self.connected = False
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -479,10 +528,29 @@ class DeltaWebSocket:
                 backoff = 1.0
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 logger.exception("Delta WS error. Reconnecting in %.0fs…", backoff)
+                await self._mark_disconnected(f"error: {type(exc).__name__}")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)
+            else:
+                await self._mark_disconnected("closed")
+                if self._running:
+                    await asyncio.sleep(backoff)
+
+    async def _emit(self, event: dict) -> None:
+        if isinstance(self.delta_events, asyncio.Queue):
+            await self.delta_events.put(event)
+        else:
+            await self.delta_events(event)
+
+    async def _mark_disconnected(self, reason: str) -> None:
+        was_connected, self.connected = self.connected, False
+        if self.on_disconnect is not None and (was_connected or reason.startswith("error")):
+            try:
+                await self.on_disconnect(reason)
+            except Exception:
+                logger.exception("on_disconnect callback failed")
 
     async def _connect_and_listen(self) -> None:
         session = self.client._session
@@ -493,7 +561,9 @@ class DeltaWebSocket:
             "Origin": settings.delta_ws_origin,
             "User-Agent": "Mozilla/5.0 (signalbot/1.0)",
         }
-        async with session.ws_connect(self._ws_url, headers=headers) as ws:
+        async with session.ws_connect(
+            self._ws_url, headers=headers, heartbeat=self.heartbeat
+        ) as ws:
             await self._authenticate(ws)
             await ws.send_json(
                 {
@@ -504,6 +574,12 @@ class DeltaWebSocket:
                 }
             )
             logger.info("Delta WS subscribed to private_positions + private_orders")
+            self.connected = True
+            if self.on_connect is not None:
+                try:
+                    await self.on_connect()
+                except Exception:
+                    logger.exception("on_connect callback failed")
 
             async for msg in ws:
                 if not self._running:
@@ -514,7 +590,7 @@ class DeltaWebSocket:
                     except json.JSONDecodeError:
                         logger.warning("Delta WS non-JSON: %s", msg.data[:200])
                         continue
-                    await self.delta_events.put(event)
+                    await self._emit(event)
                 elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                     logger.warning("Delta WS closed / error")
                     break

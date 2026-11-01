@@ -48,6 +48,13 @@ class TelegramNotifier:
         await self.application.stop()
         await self.application.shutdown()
 
+    async def send_text(self, text: str) -> None:
+        """Plain-text operational alert (no Markdown parsing, so no escaping issues)."""
+        if not self.chat_id or not self.application:
+            logger.debug("Telegram not configured; alert not sent: %s", text)
+            return
+        await self.application.bot.send_message(chat_id=self.chat_id, text=text)
+
     async def notify_signal(self, signal: Signal) -> None:
         if not self.chat_id or not self.application:
             logger.debug("Telegram not configured; skipping signal notification.")

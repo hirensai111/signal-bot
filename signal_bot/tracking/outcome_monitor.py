@@ -1,4 +1,21 @@
-"""Monitors Delta position/order events and records actual outcomes."""
+"""Detects position exits and records each trade's outcome exactly once.
+
+Two records are written per closed trade, in **one** transaction together with
+the risk-state update:
+
+* ``signal_outcomes`` — signal quality, kept for the daily summary/Telegram.
+  ``pnl_r`` is the *realised* R (net of fees, slippage and funding).
+* ``trade_results`` — execution quality: intended vs actual entry, slippage,
+  fees, funding, fill ratio, the signal's own R (``signal_r``, measured at its
+  intended levels) and the realised R.  The gap between the two is the cost of
+  execution.
+
+The ``signal_outcomes`` primary key makes the close idempotent: a duplicated
+exit fill, a redelivered position update, or the reconciler reconstructing the
+same close cannot double-count PnL or the loss streak.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -7,14 +24,21 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from telegram.helpers import escape_markdown
 
+from signal_bot.core.clock import SYSTEM_CLOCK, Clock, utc
 from signal_bot.db.connection import AsyncSessionLocal
-from signal_bot.db.models import Signal, SignalOutcome
+from signal_bot.db.models import Fill, Order, Signal, SignalOutcome, TradeResult
+from signal_bot.events.bus import EventBus, Subscription
+from signal_bot.events.envelope import Event, EventType
+from signal_bot.execution.adapter import FillPurpose, fill_from_payload
+from signal_bot.execution.order_store import OrderStore, local_event_id
+from signal_bot.execution.orders import OrderState
+from signal_bot.observability import metrics
+from signal_bot.observability.logging import bind
 
 logger = logging.getLogger(__name__)
-
-ORDER_HISTORY_WINDOW_HOURS = 24
 
 EXIT_STATUS_MAP = {
     "sl_hit": "sl",
@@ -24,294 +48,252 @@ EXIT_STATUS_MAP = {
     "expired": "expired",
 }
 
+_PURPOSE_REASON = {
+    FillPurpose.STOP_LOSS: "sl_hit",
+    FillPurpose.TAKE_PROFIT: "tp_hit",
+    FillPurpose.CLOSE: "manual_close",
+    FillPurpose.LIQUIDATION: "liquidation",
+}
+
+EXIT_PURPOSES = {str(p) for p in FillPurpose if p != FillPurpose.ENTRY}
+
 
 class OutcomeMonitor:
-    """Consumes Delta WebSocket events to detect position closes and record outcomes."""
-
     def __init__(
         self,
-        delta_events: asyncio.Queue,
+        bus: EventBus,
+        order_store: OrderStore,
+        adapter=None,
         session_factory=None,
         telegram_notifier=None,
         governor=None,
-        delta_client=None,
+        clock: Clock = SYSTEM_CLOCK,
+        exit_fill_retries: int = 3,
+        exit_fill_retry_delay: float = 1.0,
     ) -> None:
-        self.delta_events = delta_events
+        self.bus = bus
+        self.store = order_store
+        self.adapter = adapter
         self.session_factory = session_factory or AsyncSessionLocal
         self.telegram = telegram_notifier
         self.governor = governor
-        self.delta_client = delta_client
-
+        self.clock = clock
+        self.exit_fill_retries = exit_fill_retries
+        self.exit_fill_retry_delay = exit_fill_retry_delay
         self._shutdown = asyncio.Event()
-        # product_id -> previous size (for close detection)
-        self._position_sizes: dict[int, Decimal] = {}
-        # product_id -> signal_id mapping for fast lookup after fill
-        self._product_signal_map: dict[int, str] = {}
+        self._subscription: Subscription | None = None
+        self._position_sizes: dict[str, Decimal] = {}
+        self.closed_trades = 0
+
+    def subscribe(self) -> Subscription:
+        if self._subscription is None:
+            self._subscription = self.bus.subscribe(
+                "outcomes", [EventType.EXCHANGE_FILL, EventType.EXCHANGE_POSITION_UPDATE]
+            )
+        return self._subscription
 
     def shutdown(self) -> None:
-        logger.info("Outcome monitor shutdown requested.")
         self._shutdown.set()
 
     async def run(self) -> None:
-        logger.info("Outcome monitor started (Delta-event driven).")
+        sub = self.subscribe()
+        logger.info("Outcome monitor started.")
         summary_task = asyncio.create_task(self._daily_summary_loop())
-
-        while not self._shutdown.is_set():
-            try:
-                event = await asyncio.wait_for(self.delta_events.get(), timeout=1.0)
-            except TimeoutError:
-                continue
-
-            try:
-                await self._handle_event(event)
-            except Exception:
-                logger.exception("Unhandled error processing delta event")
-
-        summary_task.cancel()
         try:
-            await summary_task
-        except asyncio.CancelledError:
-            pass
+            while not self._shutdown.is_set():
+                event = await sub.get(timeout=1.0)
+                if event is None:
+                    continue
+                try:
+                    with bind(event_id=event.event_id, correlation_id=event.correlation_id):
+                        await self.handle_event(event)
+                except Exception:
+                    metrics.EVENT_PROCESSING_FAILURES.labels("outcomes").inc()
+                    logger.exception("Outcome monitor failed on %s", event.event_type)
+                finally:
+                    await sub.ack(event)
+        finally:
+            summary_task.cancel()
+            try:
+                await summary_task
+            except asyncio.CancelledError:
+                pass
 
     # ------------------------------------------------------------------
-    # event routing
+    # event handling
     # ------------------------------------------------------------------
-    async def _handle_event(self, event: dict[str, Any]) -> None:
-        channel = event.get("channel")
-        if channel == "private_positions":
-            await self._handle_position_event(event)
-        elif channel == "private_orders":
-            await self._handle_order_event(event)
-
-    async def _handle_position_event(self, event: dict[str, Any]) -> None:
-        data = event.get("data", {})
-        product_id = data.get("product_id")
-        if product_id is None:
-            return
-
-        size = Decimal(str(data.get("size", "0")))
-        prev_size = self._position_sizes.get(product_id, Decimal("0"))
-        self._position_sizes[product_id] = size
-
-        # Detect close: non-zero -> zero
-        if prev_size != 0 and size == 0:
-            await self._process_position_close(product_id, data)
-
-    async def _handle_order_event(self, event: dict[str, Any]) -> None:
-        """Track order fills so we know which signal owns which product_id."""
-        data = event.get("data", {})
-        coid = data.get("client_order_id")
-        if not coid or not coid.startswith("sig_"):
-            return
-
-        state = data.get("state", "")
-        if state == "filled":
-            product_id = data.get("product_id")
-            if product_id is not None:
-                self._product_signal_map[int(product_id)] = coid
-
-    # ------------------------------------------------------------------
-    # position close processing
-    # ------------------------------------------------------------------
-    async def _process_position_close(self, product_id: int, position_data: dict[str, Any]) -> None:
-        async with self.session_factory() as session:
-            signal = await self._resolve_signal(session, product_id, position_data)
-            if signal is None:
-                logger.critical("Orphan close: no matching signal for product_id=%s", product_id)
+    async def handle_event(self, event: Event) -> None:
+        if event.event_type == EventType.EXCHANGE_FILL:
+            fill = fill_from_payload(event.payload)
+            if fill.purpose == FillPurpose.ENTRY or not fill.client_order_id:
                 return
+            await self.store.record_fill(fill, event.payload.get("venue", "unknown"))
+            await self._maybe_close(fill.client_order_id)
+        elif event.event_type == EventType.EXCHANGE_POSITION_UPDATE:
+            symbol = event.payload.get("symbol")
+            size = Decimal(str(event.payload.get("size") or "0"))
+            prev = self._position_sizes.get(symbol)
+            self._position_sizes[symbol] = size
+            if size == 0 and prev not in (None, Decimal("0")):
+                await self.on_flat(symbol)
 
-            exit_price, exit_reason, exit_fees = await self._determine_exit(
-                session, signal, product_id, position_data
-            )
+    async def _maybe_close(self, coid: str) -> bool:
+        order = await self.store.get_by_client_id(coid)
+        if order is None or order.state != OrderState.FILLED:
+            return False
+        fills = await self.store.fills_for(coid)
+        exit_qty = sum((f.qty for f in fills if f.purpose in EXIT_PURPOSES), Decimal("0"))
+        if exit_qty < (order.filled_size or 0):
+            return False  # partial exit; position still open
+        return await self.close_trade(order)
 
-            hold_minutes = self._compute_hold_minutes(signal)
-            pnl_pct, pnl_r = self._compute_pnl(signal, exit_price)
-
-            outcome = SignalOutcome(
-                signal_id=signal.id,
-                exit_price=exit_price,
-                exit_ts=datetime.now(timezone.utc),
-                pnl_pct=pnl_pct,
-                pnl_r=pnl_r,
-                hold_minutes=hold_minutes,
-                exit_reason=exit_reason,
-            )
-            session.add(outcome)
-
-            db_status = EXIT_STATUS_MAP.get(exit_reason, "closed_manual")
-            signal.status = db_status
-            await session.commit()
-
-        logger.info(
-            "Signal %s closed: reason=%s price=%s pnl_r=%s",
-            signal.id,
-            exit_reason,
-            exit_price,
-            pnl_r,
-        )
-
-        # Notify outside DB session
-        if self.telegram:
-            try:
-                await self.telegram.notify_outcome(signal, outcome)
-            except Exception:
-                logger.exception("Telegram notify failed for signal %s", signal.id)
-
-        # Update governor
-        if self.governor:
-            try:
-                await self.governor.record_outcome(signal.id, pnl_r, won=pnl_r > 0)
-            except Exception:
-                logger.exception("Governor record_outcome failed for signal %s", signal.id)
-
-    async def _resolve_signal(
-        self, session, product_id: int, position_data: dict[str, Any]
-    ) -> Signal | None:
-        """Look up signal by client_order_id, delta_order_id, or symbol+status."""
-        # 1. Try client_order_id from our in-memory map
-        coid = self._product_signal_map.pop(product_id, None)
-        if coid:
-            result = await session.execute(select(Signal).where(Signal.client_order_id == coid))
-            sig = result.scalar_one_or_none()
-            if sig:
-                return sig
-
-        # 2. Try delta_order_id from position_data (if present)
-        delta_oid = position_data.get("closing_order_id") or position_data.get("order_id")
-        if delta_oid:
-            result = await session.execute(
-                select(Signal).where(Signal.delta_order_id == str(delta_oid))
-            )
-            sig = result.scalar_one_or_none()
-            if sig:
-                return sig
-
-        # 3. Fallback: find triggered signal by symbol
-        if self.delta_client is not None:
-            binance_symbol = self.delta_client.symbol_map.resolve_by_product_id(product_id)
-        else:
-            binance_symbol = None
-
-        if binance_symbol:
-            result = await session.execute(
-                select(Signal)
-                .where(Signal.symbol == binance_symbol)
-                .where(Signal.status == "triggered")
-                .order_by(Signal.created_at.desc())
-            )
-            sig = result.scalar_one_or_none()
-            if sig:
-                return sig
-
-        return None
-
-    async def _determine_exit(
-        self, session, signal: Signal, product_id: int, position_data: dict[str, Any]
-    ) -> tuple[Decimal, str, Decimal]:
-        """Best-effort determination of exit price, reason, and fees.
-
-        Tries order history first; falls back to SL/TP heuristic.
-        """
-        exit_fees = Decimal("0")
-
-        if self.delta_client is not None:
-            try:
-                exit_price, exit_reason, exit_fees = await self._query_order_history(
-                    signal, product_id
-                )
-                if exit_price is not None:
-                    return exit_price, exit_reason, exit_fees
-            except Exception:
-                logger.exception("Order history query failed for signal %s", signal.id)
-
-        # Fallback: liquidation check
-        liq_price = position_data.get("liquidation_price")
-        if liq_price is not None:
-            liq = Decimal(str(liq_price))
-            if signal.side == "long" and liq > 0:
-                # If we were liquidated, use liq price
-                if signal.stop_loss and liq <= signal.stop_loss:
-                    return liq, "liquidation", Decimal("0")
-            elif signal.side == "short" and liq > 0:
-                if signal.stop_loss and liq >= signal.stop_loss:
-                    return liq, "liquidation", Decimal("0")
-
-        # Fallback: heuristic — whichever level was closer to current
-        # market (we don't have current price, so use SL/TP midpoint logic)
-        # Default to manual_close with SL price
-        return signal.stop_loss, "manual_close", Decimal("0")
-
-    async def _query_order_history(
-        self, signal: Signal, product_id: int
-    ) -> tuple[Decimal | None, str | None, Decimal]:
-        """Query Delta order history to find SL/TP fill."""
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(hours=ORDER_HISTORY_WINDOW_HOURS)
-
-        history = await self.delta_client.get_order_history(
-            product_id=product_id,
-            start=start.isoformat(),
-            end=end.isoformat(),
-        )
-        orders = history.get("orders", []) if isinstance(history, dict) else []
-
-        # Look for the entry order to find its ID, then look for child SL/TP
-        entry_order_id = signal.delta_order_id
-        if not entry_order_id:
-            return None, None, Decimal("0")
-
-        # Scan for filled orders that are NOT the entry order
+    async def on_flat(self, symbol: str) -> None:
+        """The venue reports a flat position: close every filled order on that symbol."""
+        orders = [o for o in await self.store.in_states([OrderState.FILLED]) if o.symbol == symbol]
+        if not orders:
+            # Usually the close was already recorded from its exit fills; true orphan
+            # exposure is detected by the reconciler against venue positions.
+            logger.debug("Flat position on %s with no open local order", symbol)
+            return
         for order in orders:
-            oid = str(order.get("id", ""))
-            if oid == entry_order_id:
-                continue
-            if order.get("state") != "filled":
-                continue
+            await self.reconstruct_close(order)
 
-            # Check if this looks like a bracket leg
-            avg_fill = order.get("average_fill_price") or order.get("price", "0")
-            price = Decimal(str(avg_fill))
+    async def reconstruct_close(self, order: Order) -> bool:
+        """Fetch exit fills from the venue if the stream didn't deliver them, then close."""
+        fills = [f for f in await self.store.fills_for(order.client_order_id)]
+        if not any(f.purpose in EXIT_PURPOSES for f in fills) and self.adapter is not None:
+            for attempt in range(self.exit_fill_retries):
+                try:
+                    venue_fills = await self.adapter.exit_fills(
+                        order.symbol, order.client_order_id, utc(order.submitted_at)
+                    )
+                except Exception:
+                    logger.exception("exit_fills lookup failed for %s", order.client_order_id)
+                    venue_fills = []
+                for vf in venue_fills:
+                    await self.store.record_fill(vf, order.venue)
+                if venue_fills:
+                    break
+                if attempt < self.exit_fill_retries - 1:
+                    await asyncio.sleep(self.exit_fill_retry_delay)
+        return await self.close_trade(order)
 
-            if order.get("bracket_stop_loss_price") or order.get("stop_loss_price"):
-                return price, "sl_hit", Decimal("0")
-            if order.get("bracket_take_profit_price") or order.get("take_profit_price"):
-                return price, "tp_hit", Decimal("0")
+    # ------------------------------------------------------------------
+    # the exactly-once close
+    # ------------------------------------------------------------------
+    async def close_trade(self, order: Order) -> bool:
+        coid = order.client_order_id
+        with bind(
+            order_id=coid, signal_id=str(order.signal_id), correlation_id=order.correlation_id
+        ):
+            async with self.session_factory() as session:
+                signal = await session.get(Signal, order.signal_id)
+                existing = await session.get(SignalOutcome, order.signal_id)
+                if signal is None:
+                    return False
+                if existing is not None:
+                    await self._ensure_closed(order, existing.exit_reason)
+                    return False
 
-            # Heuristic: if fill price is closer to SL than TP
-            if signal.stop_loss and signal.take_profit:
-                sl_dist = abs(price - signal.stop_loss)
-                tp_dist = abs(price - signal.take_profit)
-                if sl_dist < tp_dist:
-                    return price, "sl_hit", Decimal("0")
-                else:
-                    return price, "tp_hit", Decimal("0")
+                rows = (
+                    await session.execute(select(Fill).where(Fill.client_order_id == coid))
+                ).scalars()
+                fills = list(rows)
+                result = compute_trade_result(order, fills, self._funding(order))
+                closed_at = result["closed_at"] or self.clock.now()
+                outcome = SignalOutcome(
+                    signal_id=signal.id,
+                    exit_price=result["exit_price"],
+                    exit_ts=closed_at,
+                    pnl_pct=result["pnl_pct"],
+                    pnl_r=result["realized_r"],
+                    hold_minutes=_hold_minutes(order, closed_at),
+                    exit_reason=result["exit_reason"],
+                )
+                trade = TradeResult(
+                    signal_id=signal.id,
+                    venue=order.venue,
+                    symbol=order.symbol,
+                    side=signal.side,
+                    intended_entry=order.intended_entry,
+                    actual_entry=result["entry_price"],
+                    exit_price=result["exit_price"],
+                    exit_reason=result["exit_reason"],
+                    size_requested=order.size,
+                    size_filled=order.filled_size,
+                    gross_pnl=result["gross_pnl"],
+                    fees=result["fees"],
+                    funding=result["funding"],
+                    net_pnl=result["net_pnl"],
+                    signal_r=result["signal_r"],
+                    realized_r=result["realized_r"],
+                    entry_slippage_bps=result["entry_slippage_bps"],
+                    closed_at=closed_at,
+                )
+                session.add_all([outcome, trade])
+                signal.status = EXIT_STATUS_MAP.get(result["exit_reason"], "closed_manual")
+                tripped = False
+                if self.governor is not None and hasattr(self.governor, "apply_outcome"):
+                    tripped = await self.governor.apply_outcome(
+                        session, signal.id, result["realized_r"], won=result["net_pnl"] > 0
+                    )
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    await session.rollback()
+                    return False
 
-        return None, None, Decimal("0")
+            self.closed_trades += 1
+            if self.governor is not None and hasattr(self.governor, "after_outcome"):
+                await self.governor.after_outcome(tripped)
+            await self._ensure_closed(order, result["exit_reason"])
+            logger.info(
+                "Trade closed: %s %s reason=%s net=%s realized_r=%s signal_r=%s",
+                order.symbol,
+                coid,
+                result["exit_reason"],
+                result["net_pnl"],
+                result["realized_r"],
+                result["signal_r"],
+            )
+            await self._publish_close(order, result)
+            if self.telegram is not None:
+                try:
+                    await self.telegram.notify_outcome(signal, outcome)
+                except Exception:
+                    logger.exception("Telegram notify failed for %s", signal.id)
+            return True
 
-    @staticmethod
-    def _compute_hold_minutes(signal: Signal) -> int:
-        created = signal.created_at
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        return int((datetime.now(timezone.utc) - created).total_seconds() / 60)
+    async def _ensure_closed(self, order: Order, reason: str) -> None:
+        await self.store.transition(
+            order.client_order_id,
+            OrderState.CLOSED,
+            event_id=local_event_id(order.client_order_id, "closed"),
+            reason=reason,
+            signal_status=EXIT_STATUS_MAP.get(reason, "closed_manual"),
+        )
 
-    @staticmethod
-    def _compute_pnl(signal: Signal, exit_price: Decimal) -> tuple[Decimal, Decimal]:
-        entry_f = float(signal.entry)
-        stop_f = float(signal.stop_loss)
-        exit_f = float(exit_price)
+    def _funding(self, order: Order) -> Decimal:
+        fn = getattr(self.adapter, "funding_between", None)
+        if fn is None or order.submitted_at is None:
+            return Decimal("0")
+        try:
+            return Decimal(str(fn(order.symbol, utc(order.submitted_at), self.clock.now())))
+        except Exception:
+            return Decimal("0")
 
-        if entry_f == 0 or entry_f == stop_f:
-            return Decimal("0"), Decimal("0")
-
-        if signal.side == "long":
-            pnl_pct = Decimal(str((exit_f - entry_f) / entry_f * 100))
-            pnl_r = Decimal(str((exit_f - entry_f) / (entry_f - stop_f)))
-        else:
-            pnl_pct = Decimal(str((entry_f - exit_f) / entry_f * 100))
-            pnl_r = Decimal(str((entry_f - exit_f) / (stop_f - entry_f)))
-
-        return pnl_pct, pnl_r
+    async def _publish_close(self, order: Order, result: dict[str, Any]) -> None:
+        try:
+            await self.bus.publish(
+                Event.create(
+                    EventType.POSITION_CLOSED,
+                    {"client_order_id": order.client_order_id, "symbol": order.symbol, **result},
+                    source="outcome_monitor",
+                    correlation_id=order.correlation_id,
+                )
+            )
+        except Exception:
+            logger.exception("POSITION_CLOSED publish failed")
 
     # ------------------------------------------------------------------
     # daily summary
@@ -322,20 +304,18 @@ class OutcomeMonitor:
             next_midnight = (now + timedelta(days=1)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            wait_seconds = (next_midnight - now).total_seconds()
-
             try:
-                await asyncio.wait_for(self._shutdown.wait(), timeout=wait_seconds)
+                await asyncio.wait_for(
+                    self._shutdown.wait(), timeout=(next_midnight - now).total_seconds()
+                )
                 return
             except TimeoutError:
                 pass
-
             await self._post_daily_summary()
 
     async def _post_daily_summary(self) -> None:
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         yesterday = today - timedelta(days=1)
-
         async with self.session_factory() as session:
             result = await session.execute(
                 select(SignalOutcome, Signal)
@@ -345,42 +325,8 @@ class OutcomeMonitor:
                 .order_by(SignalOutcome.exit_ts)
             )
             rows = result.all()
-
-        total = len(rows)
-        if total == 0:
-            text = "📊 Daily Summary\nNo trades yesterday."
-        else:
-            outcomes = [r.SignalOutcome for r in rows]
-            wins = sum(1 for o in outcomes if o.pnl_r > 0)
-            win_rate = wins / total * 100
-            avg_r = sum(float(o.pnl_r) for o in outcomes) / total
-
-            gross_profit = sum(float(o.pnl_r) for o in outcomes if o.pnl_r > 0)
-            gross_loss = abs(sum(float(o.pnl_r) for o in outcomes if o.pnl_r < 0))
-            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
-
-            equity = [0.0]
-            for o in outcomes:
-                equity.append(equity[-1] + float(o.pnl_r))
-            peak = equity[0]
-            max_dd = 0.0
-            for val in equity:
-                if val > peak:
-                    peak = val
-                dd = peak - val
-                if dd > max_dd:
-                    max_dd = dd
-
-            text = (
-                f"📊 Daily Summary\n\n"
-                f"Total signals: {total}\n"
-                f"Win rate: {wins}/{total} ({win_rate:.1f}%)\n"
-                f"Avg R: {avg_r:.2f}\n"
-                f"Profit factor: {profit_factor:.2f}\n"
-                f"Max drawdown: {max_dd:.2f}R"
-            )
-
-        if self.telegram and self.telegram.application:
+        text = format_daily_summary([r.SignalOutcome for r in rows])
+        if self.telegram and getattr(self.telegram, "application", None):
             try:
                 await self.telegram.application.bot.send_message(
                     chat_id=self.telegram.chat_id,
@@ -389,3 +335,106 @@ class OutcomeMonitor:
                 )
             except Exception:
                 logger.exception("Failed to send daily summary")
+
+
+# ---------------------------------------------------------------------------
+# pure helpers (unit-tested directly)
+# ---------------------------------------------------------------------------
+
+
+def compute_trade_result(order: Order, fills: list[Fill], funding: Decimal) -> dict[str, Any]:
+    entry_fills = [f for f in fills if f.purpose == str(FillPurpose.ENTRY)]
+    exit_fills = [f for f in fills if f.purpose in EXIT_PURPOSES]
+    qty = Decimal(str(order.filled_size or 0))
+    cv = Decimal(str(order.contract_value or 1))
+    entry = Decimal(str(order.avg_fill_price or order.intended_entry))
+    direction = Decimal("1") if order.side == "buy" else Decimal("-1")
+
+    exit_qty = sum((Decimal(str(f.qty)) for f in exit_fills), Decimal("0"))
+    if exit_qty > 0:
+        exit_price = sum(Decimal(str(f.qty)) * Decimal(str(f.price)) for f in exit_fills) / exit_qty
+        dominant = max(exit_fills, key=lambda f: f.qty).purpose
+        exit_reason = _PURPOSE_REASON.get(FillPurpose(dominant)) or _nearest_level(
+            order, exit_price
+        )
+        closed_at = max(utc(f.occurred_at) for f in exit_fills)
+    else:
+        # No exit fill could be found: assume the worst plausible exit (the stop).
+        exit_price = Decimal(str(order.stop_loss_price))
+        exit_reason = "manual_close"
+        closed_at = None
+
+    closed_qty = min(qty, exit_qty) if exit_qty > 0 else qty
+    gross = direction * closed_qty * cv * (exit_price - entry)
+    fees = sum((Decimal(str(f.fee)) for f in entry_fills + exit_fills), Decimal("0"))
+    if not entry_fills:
+        fees += Decimal(str(order.fees or 0))
+    net = gross - fees + funding
+
+    intended = Decimal(str(order.intended_entry))
+    risk_per_unit = abs(intended - Decimal(str(order.stop_loss_price)))
+    intended_risk = Decimal(str(order.size)) * cv * risk_per_unit
+    realized_r = net / intended_risk if intended_risk > 0 else Decimal("0")
+
+    if exit_reason == "sl_hit":
+        level = Decimal(str(order.stop_loss_price))
+    elif exit_reason == "tp_hit":
+        level = Decimal(str(order.take_profit_price))
+    else:
+        level = exit_price
+    signal_r = direction * (level - intended) / risk_per_unit if risk_per_unit > 0 else Decimal("0")
+    slippage_bps = direction * (entry - intended) / intended * Decimal("10000") if intended else 0
+    notional = qty * cv * entry
+    pnl_pct = net / notional * 100 if notional > 0 else Decimal("0")
+
+    q = Decimal("0.00000001")
+    return {
+        "entry_price": entry,
+        "exit_price": exit_price.quantize(q),
+        "exit_reason": exit_reason,
+        "gross_pnl": gross.quantize(q),
+        "fees": fees.quantize(q),
+        "funding": funding.quantize(q),
+        "net_pnl": net.quantize(q),
+        "realized_r": realized_r.quantize(q),
+        "signal_r": signal_r.quantize(q),
+        "entry_slippage_bps": Decimal(slippage_bps).quantize(q),
+        "fill_ratio": (qty / Decimal(str(order.size))).quantize(q) if order.size else Decimal("0"),
+        "pnl_pct": pnl_pct.quantize(q),
+        "closed_at": closed_at,
+    }
+
+
+def _nearest_level(order: Order, price: Decimal) -> str:
+    sl_dist = abs(price - Decimal(str(order.stop_loss_price)))
+    tp_dist = abs(price - Decimal(str(order.take_profit_price)))
+    return "sl_hit" if sl_dist < tp_dist else "tp_hit"
+
+
+def _hold_minutes(order: Order, closed_at: datetime) -> int:
+    start = utc(order.submitted_at or order.created_at)
+    return max(0, int((utc(closed_at) - start).total_seconds() / 60))
+
+
+def format_daily_summary(outcomes: list[SignalOutcome]) -> str:
+    total = len(outcomes)
+    if total == 0:
+        return "📊 Daily Summary\nNo trades yesterday."
+    wins = sum(1 for o in outcomes if o.pnl_r > 0)
+    avg_r = sum(float(o.pnl_r) for o in outcomes) / total
+    gross_profit = sum(float(o.pnl_r) for o in outcomes if o.pnl_r > 0)
+    gross_loss = abs(sum(float(o.pnl_r) for o in outcomes if o.pnl_r < 0))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+    equity, peak, max_dd = 0.0, 0.0, 0.0
+    for o in outcomes:
+        equity += float(o.pnl_r)
+        peak = max(peak, equity)
+        max_dd = max(max_dd, peak - equity)
+    return (
+        f"📊 Daily Summary\n\n"
+        f"Total signals: {total}\n"
+        f"Win rate: {wins}/{total} ({wins / total * 100:.1f}%)\n"
+        f"Avg R: {avg_r:.2f}\n"
+        f"Profit factor: {profit_factor:.2f}\n"
+        f"Max drawdown: {max_dd:.2f}R"
+    )

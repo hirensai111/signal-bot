@@ -1,45 +1,88 @@
-"""Reconciles Delta Exchange state with local DB signals.
+"""Reconciles venue truth with the local order store.
 
-Runs on startup and periodically every 5 minutes to detect missed fills,
-orphan positions, and orphan orders.
+Runs at startup (the execution engine waits for the first successful pass),
+periodically, and on demand after the private stream reconnects.  The venue is
+the source of truth for *exposure*; the local store is the source of truth for
+*intent*.  Rules:
+
+* ``submitting`` / ``submission_unknown`` / ``reconcile_required``: look the
+  order up by client id.  Found → adopt the venue state.  Not found → keep the
+  order unresolved (trading blocked) until ``unknown_grace_seconds`` have
+  elapsed *and* the venue shows no position on that symbol; only then mark it
+  ``cancelled`` (``not_found_on_exchange``).  Unknown is never treated as
+  cancelled immediately.
+* ``pending`` orders older than the grace window were never sent (the
+  ``submitting`` transition is persisted before any network call) → cancelled.
+* open orders: refresh from the venue (catches missed fills/cancels).
+* ``filled`` orders without a venue position: the close was missed →
+  reconstruct it from venue fills.
+* ``filled`` orders whose venue position lacks a stop → protective recovery.
+* venue positions with no local owner → orphan exposure: alert and (by default)
+  block new orders until resolved by an operator.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-from typing import Any
+import time
+from datetime import timedelta
 
-from sqlalchemy import select
-
-from signal_bot.config import settings
-from signal_bot.db.models import RiskState, Signal, SignalOutcome
+from signal_bot.core.clock import SYSTEM_CLOCK, Clock, utc
+from signal_bot.events.envelope import Event, EventType, deterministic_event_id
+from signal_bot.execution.adapter import AuthenticationFailed, ExchangeError
+from signal_bot.execution.engine import CLIENT_ORDER_PREFIX
+from signal_bot.execution.order_store import OrderStore, local_event_id
+from signal_bot.execution.orders import OrderState
+from signal_bot.observability import metrics
 
 logger = logging.getLogger(__name__)
 
-RECONCILE_INTERVAL_SECONDS = 300  # 5 minutes
-ORDER_HISTORY_WINDOW_HOURS = 24
+S = OrderState
+RECONCILE_INTERVAL_SECONDS = 300
 
 
 class Reconciler:
-    """Cross-checks Delta REST state against local signal records."""
-
     def __init__(
         self,
-        delta_client,
-        session_factory,
-        telegram=None,
+        adapter,
+        order_store: OrderStore,
         governor=None,
+        telegram=None,
+        outcome_monitor=None,
+        engine=None,
+        bus=None,
+        clock: Clock = SYSTEM_CLOCK,
+        interval: float = RECONCILE_INTERVAL_SECONDS,
+        unknown_grace_seconds: float = 300.0,
+        block_on_orphans: bool = True,
+        retry_delay: float = 10.0,
     ) -> None:
-        self.delta_client = delta_client
-        self.session_factory = session_factory
-        self.telegram = telegram
+        self.adapter = adapter
+        self.store = order_store
         self.governor = governor
+        self.telegram = telegram
+        self.outcome_monitor = outcome_monitor
+        self.engine = engine
+        self.bus = bus
+        self.clock = clock
+        self.interval = interval
+        self.unknown_grace = timedelta(seconds=unknown_grace_seconds)
+        self.block_on_orphans = block_on_orphans
+        self.retry_delay = retry_delay
 
         self._running = False
         self._task: asyncio.Task | None = None
         self._has_run_once = asyncio.Event()
+        self._lock = asyncio.Lock()
+        self.last_run_at = None
+        self.last_ok = False
+        self.last_discrepancies: list[dict] = []
+        self.runs = 0
 
+    # ------------------------------------------------------------------
+    # lifecycle
+    # ------------------------------------------------------------------
     def start(self) -> None:
         if self._task is not None:
             return
@@ -56,392 +99,220 @@ class Reconciler:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        logger.info("Reconciler stopped")
 
     async def wait_for_first_run(self) -> None:
-        """Block until the first reconciliation has completed successfully."""
         await self._has_run_once.wait()
 
-    # ------------------------------------------------------------------
-    # main loop
-    # ------------------------------------------------------------------
     async def _run_loop(self) -> None:
-        # Run immediately on startup
-        try:
-            await self._reconcile(is_startup=True)
-            self._has_run_once.set()
-        except Exception:
-            logger.exception("Startup reconciliation failed")
-            # Retry every 10s until success so engine can eventually start
-            while self._running and not self._has_run_once.is_set():
-                await asyncio.sleep(10)
-                try:
-                    await self._reconcile(is_startup=True)
-                    self._has_run_once.set()
-                except Exception:
-                    logger.exception("Startup reconciliation retry failed")
-
-        while self._running:
-            await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
-            if not self._running:
+        while self._running and not self._has_run_once.is_set():
+            if await self.reconcile_now(reason="startup"):
                 break
+            await asyncio.sleep(self.retry_delay)
+        while self._running:
+            await asyncio.sleep(self.interval)
+            if self._running:
+                await self.reconcile_now(reason="periodic")
+
+    async def reconcile_now(self, reason: str = "manual") -> bool:
+        async with self._lock:
+            start = time.perf_counter()
             try:
-                await self._reconcile(is_startup=False)
+                discrepancies = await self._reconcile(is_startup=not self._has_run_once.is_set())
             except Exception:
-                logger.exception("Periodic reconciliation failed")
+                logger.exception("Reconciliation (%s) failed", reason)
+                self.last_ok = False
+                return False
+            finally:
+                metrics.RECONCILIATION_DURATION.observe(time.perf_counter() - start)
+            self.runs += 1
+            self.last_ok = True
+            self.last_run_at = self.clock.now()
+            self.last_discrepancies = discrepancies
+            self._has_run_once.set()
+            await self._publish(
+                EventType.RECONCILIATION_COMPLETED,
+                {"reason": reason, "discrepancies": len(discrepancies)},
+            )
+            logger.info(
+                "Reconciliation (%s) complete: %d discrepancies", reason, len(discrepancies)
+            )
+            return True
 
     # ------------------------------------------------------------------
-    # core reconciliation logic
+    # core
     # ------------------------------------------------------------------
-    async def _reconcile(self, is_startup: bool) -> None:
-        logger.info("Running reconciliation (startup=%s)", is_startup)
+    async def _reconcile(self, is_startup: bool) -> list[dict]:
+        try:
+            positions = await self.adapter.positions()
+            venue_open = await self.adapter.open_orders()
+        except AuthenticationFailed as exc:
+            if self.governor is not None:
+                self.governor.set_breaker("exchange_auth", f"authentication failed: {exc}")
+            raise
+        if self.governor is not None:
+            self.governor.clear_breaker("exchange_auth")
+            self.governor.observe_exchange_positions(len(positions))
+        pos_by_symbol = {p.symbol: p for p in positions}
+        found: list[dict] = []
+        now = self.clock.now()
 
-        # Fetch Delta truth per symbol (Delta India /v2/positions requires product_id)
-        delta_positions: dict[int, dict] = {}
-        for symbol in settings.symbols:
+        # 1. in-flight / unresolved orders
+        inflight = await self.store.in_states(
+            [
+                S.PENDING,
+                S.SUBMITTING,
+                S.SUBMISSION_UNKNOWN,
+                S.RECONCILIATION_REQUIRED,
+                S.ACKNOWLEDGED,
+                S.PARTIALLY_FILLED,
+                S.CANCEL_PENDING,
+            ]
+        )
+        for order in inflight:
+            coid = order.client_order_id
+            state = S(order.state)
+            age = now - utc(order.created_at)
+            if state == S.PENDING:
+                if age > self.unknown_grace:
+                    await self._transition(coid, S.CANCELLED, "abandoned_before_submit")
+                continue
             try:
-                pid = self.delta_client.symbol_map.get_product_id(symbol)
-            except (KeyError, RuntimeError):
-                logger.debug("Skipping reconciliation for %s: not mapped on Delta", symbol)
+                venue_order = await self.adapter.get_order(coid)
+            except ExchangeError as exc:
+                logger.warning("Lookup of %s failed during reconcile: %s", coid, exc)
+                if state in (S.SUBMITTING, S.SUBMISSION_UNKNOWN, S.RECONCILIATION_REQUIRED):
+                    self._block(coid, f"lookup failed: {exc}")
                 continue
 
-            try:
-                resp = await self.delta_client.get_open_positions(product_id=pid)
-                positions = _parse_positions(resp)
-                delta_positions.update(positions)
-            except Exception:
-                logger.exception("Failed to fetch positions for %s (pid=%s)", symbol, pid)
-
-        orders_resp = await self.delta_client.get_open_orders()
-        delta_orders = _parse_orders(orders_resp)
-
-        async with self.session_factory() as session:
-            # Load DB signals that we expect to be active
-            result = await session.execute(
-                select(Signal).where(Signal.status.in_(["submitted", "triggered"]))
-            )
-            db_signals = {s.id: s for s in result.scalars().all()}
-
-            # Build lookups by delta identifiers
-            db_by_coid: dict[str, Signal] = {}
-            db_by_delta_oid: dict[str, Signal] = {}
-            db_by_symbol_triggered: dict[str, list[Signal]] = {}
-
-            for sig in db_signals.values():
-                if sig.client_order_id:
-                    db_by_coid[sig.client_order_id] = sig
-                if sig.delta_order_id:
-                    db_by_delta_oid[sig.delta_order_id] = sig
-                if sig.status == "triggered":
-                    db_by_symbol_triggered.setdefault(sig.symbol, []).append(sig)
-
-            # Case 1: signal in DB but no matching Delta position/order
-            await self._check_missed_events(session, db_signals, delta_positions, delta_orders)
-
-            # Case 2: Delta position with no linked signal
-            for _product_id, pos in delta_positions.items():
-                delta_symbol = pos.get("product_symbol", "")
-                binance_symbol = (
-                    self.delta_client.symbol_map.get_binance_symbol(delta_symbol)
-                    if hasattr(self.delta_client, "symbol_map")
-                    else None
+            if venue_order is not None:
+                result = await self.store.apply_venue_update(
+                    venue_order,
+                    event_id=deterministic_event_id(
+                        "reconcile",
+                        coid,
+                        venue_order.state,
+                        venue_order.filled_size,
+                        venue_order.updated_at.isoformat(),
+                    ),
                 )
-                if not binance_symbol:
-                    logger.warning("Cannot map delta symbol %s to binance", delta_symbol)
-                    continue
+                if result.applied:
+                    found.append(self._discrepancy("missed_order_update", coid, result))
+                new_state = S(result.order.state) if result.order is not None else state
+                if new_state not in (S.SUBMISSION_UNKNOWN, S.RECONCILIATION_REQUIRED):
+                    self._unblock(coid)
+                if new_state in (S.FILLED, S.PARTIALLY_FILLED) and self.engine is not None:
+                    await self.engine.ensure_protection(coid)
+                continue
 
-                matching = [
-                    s
-                    for s in db_signals.values()
-                    if s.symbol == binance_symbol and s.status == "triggered"
-                ]
-                if not matching:
-                    await self._handle_orphan_position(session, pos)
+            # venue has no record of this client id
+            if state in (S.SUBMITTING, S.SUBMISSION_UNKNOWN, S.RECONCILIATION_REQUIRED):
+                if age > self.unknown_grace and order.symbol not in pos_by_symbol:
+                    await self._transition(coid, S.CANCELLED, "not_found_on_exchange")
+                    self._unblock(coid)
+                    found.append({"kind": "unknown_resolved_not_found", "order": coid})
+                else:
+                    if state == S.SUBMITTING and is_startup:
+                        # crashed between persisting intent and hearing back
+                        await self._transition(coid, S.SUBMISSION_UNKNOWN, "crash_recovery")
+                    self._block(coid, "not yet visible on venue")
+            else:
+                found.append({"kind": "open_order_missing_on_venue", "order": coid})
+                metrics.RECONCILIATION_DISCREPANCIES.labels("open_order_missing").inc()
 
-            # Case 3: Delta open order with no linked signal
-            for order in delta_orders.values():
-                coid = order.get("client_order_id", "")
-                if not coid.startswith("sig_"):
-                    continue  # not our order
-                if coid not in db_by_coid:
-                    await self._handle_orphan_order(session, order)
+        # 2. filled orders must have venue exposure (and protection)
+        owned_symbols: set[str] = set()
+        for order in await self.store.in_states([S.FILLED, S.PARTIALLY_FILLED]):
+            owned_symbols.add(order.symbol)
+            pos = pos_by_symbol.get(order.symbol)
+            if pos is None:
+                if S(order.state) == S.FILLED and self.outcome_monitor is not None:
+                    metrics.RECONCILIATION_DISCREPANCIES.labels("missed_close").inc()
+                    found.append({"kind": "missed_close", "order": order.client_order_id})
+                    await self.outcome_monitor.reconstruct_close(order)
+                continue
+            if not pos.has_stop_loss and order.protective_status != "flattened":
+                metrics.RECONCILIATION_DISCREPANCIES.labels("missing_protective").inc()
+                found.append({"kind": "missing_protective", "order": order.client_order_id})
+                if self.engine is not None:
+                    await self.engine.ensure_protection(order.client_order_id, recheck=True)
 
-            # Startup-only: rebuild open-positions counter from Delta truth
-            if is_startup:
-                await self._rebuild_open_positions(session, delta_positions)
+        for order in await self.store.in_states([S.RECONCILIATION_REQUIRED, S.SUBMISSION_UNKNOWN]):
+            owned_symbols.add(order.symbol)
 
-            await session.commit()
+        # 3. orphan exposure on the venue
+        for symbol, pos in pos_by_symbol.items():
+            name = f"orphan_position:{symbol}"
+            if symbol in owned_symbols:
+                if self.governor is not None:
+                    self.governor.clear_breaker(name)
+                continue
+            metrics.RECONCILIATION_DISCREPANCIES.labels("orphan_position").inc()
+            found.append({"kind": "orphan_position", "symbol": symbol, "size": str(pos.size)})
+            await self._alert(
+                f"CRITICAL: orphan position on venue: {symbol} size={pos.size}. "
+                "Adopt or close manually."
+            )
+            if self.block_on_orphans and self.governor is not None:
+                self.governor.set_breaker(name, f"untracked position size={pos.size}")
+        if self.governor is not None:
+            for name in list(self.governor.breakers):
+                if (
+                    name.startswith("orphan_position:")
+                    and name.split(":", 1)[1] not in pos_by_symbol
+                ):
+                    self.governor.clear_breaker(name)
 
-        logger.info("Reconciliation complete")
+        # 4. venue orders carrying our prefix that we have no record of
+        for vo in venue_open:
+            if not vo.client_order_id.startswith(CLIENT_ORDER_PREFIX):
+                continue
+            if await self.store.get_by_client_id(vo.client_order_id) is None:
+                metrics.RECONCILIATION_DISCREPANCIES.labels("orphan_order").inc()
+                found.append({"kind": "orphan_order", "order": vo.client_order_id})
+                await self._alert(f"CRITICAL: orphan order on venue: {vo.client_order_id}")
+
+        for d in found:
+            await self._publish(EventType.RECONCILIATION_DISCREPANCY, d)
+        return found
 
     # ------------------------------------------------------------------
-    # case 1: missed events
+    # helpers
     # ------------------------------------------------------------------
-    async def _check_missed_events(
-        self,
-        session,
-        db_signals: dict,
-        delta_positions: dict[int, dict],
-        delta_orders: dict[str, dict],
-    ) -> None:
-        for sig in db_signals.values():
-            if sig.status == "triggered":
-                # Should have a matching open position
-                if sig.delta_symbol:
-                    product_id = self._resolve_product_id(sig.delta_symbol)
-                    if product_id is not None and product_id not in delta_positions:
-                        await self._handle_missed_close(session, sig, product_id)
+    def _discrepancy(self, kind: str, coid: str, result) -> dict:
+        metrics.RECONCILIATION_DISCREPANCIES.labels(kind).inc()
+        return {
+            "kind": kind,
+            "order": coid,
+            "from": str(result.from_state),
+            "to": str(result.to_state),
+        }
 
-            elif sig.status == "submitted":
-                # Should have a matching open order
-                if sig.delta_order_id and sig.delta_order_id not in delta_orders:
-                    # Order may have filled or been cancelled
-                    await self._handle_missed_fill(session, sig)
+    def _block(self, coid: str, reason: str) -> None:
+        if self.governor is not None:
+            self.governor.set_breaker(f"unresolved_order:{coid}", reason)
 
-    async def _handle_missed_fill(self, session, signal: Signal) -> None:
-        """Signal is 'submitted' but order is not open on Delta."""
-        if not signal.delta_order_id:
+    def _unblock(self, coid: str) -> None:
+        if self.governor is not None:
+            self.governor.clear_breaker(f"unresolved_order:{coid}")
+
+    async def _transition(self, coid: str, state: OrderState, reason: str) -> None:
+        await self.store.transition(
+            coid, state, event_id=local_event_id(coid, "reconcile", state, reason), reason=reason
+        )
+
+    async def _alert(self, text: str) -> None:
+        logger.critical(text)
+        if self.telegram is None:
             return
-
-        logger.warning(
-            "Missed fill: signal %s order %s not open on Delta",
-            signal.id,
-            signal.delta_order_id,
-        )
-
         try:
-            order = await self.delta_client.get_order_status(signal.delta_order_id)
-            order_data = order.get("order", order)
-            state = order_data.get("state", "")
-
-            if state in ("cancelled", "rejected"):
-                signal.status = "cancelled"
-                signal.cancelled_reason = f"missed_{state}"
-                logger.info("Signal %s was %s (missed event)", signal.id, state)
-                return
-            elif state == "filled":
-                signal.status = "triggered"
-                avg = order_data.get("average_fill_price") or order_data.get("price", "0")
-                signal.delta_entry_actual = Decimal(str(avg))
-                logger.info("Signal %s was filled (missed event)", signal.id)
-                return
+            await self.telegram.send_text(text)
         except Exception:
-            logger.exception("Order status fetch failed for %s", signal.delta_order_id)
+            logger.exception("alert delivery failed")
 
-        # Unknown — mark as cancelled so it doesn't block forever
-        signal.status = "cancelled"
-        signal.cancelled_reason = "missed_reconcile_unknown"
-        logger.warning("Signal %s marked cancelled (unknown state)", signal.id)
-
-    async def _handle_missed_close(self, session, signal: Signal, product_id: int) -> None:
-        """Signal is 'triggered' but no open position on Delta."""
-        logger.warning(
-            "Missed close: signal %s product_id=%s position closed on Delta",
-            signal.id,
-            product_id,
-        )
-
-        exit_price, exit_reason, _ = await self._reconstruct_exit_from_history(signal, product_id)
-
-        hold_minutes = self._compute_hold_minutes(signal)
-        pnl_pct, pnl_r = self._compute_pnl(signal, exit_price)
-
-        outcome = SignalOutcome(
-            signal_id=signal.id,
-            exit_price=exit_price,
-            exit_ts=datetime.now(timezone.utc),
-            pnl_pct=pnl_pct,
-            pnl_r=pnl_r,
-            hold_minutes=hold_minutes,
-            exit_reason=exit_reason,
-        )
-        session.add(outcome)
-
-        db_status = {
-            "sl_hit": "sl",
-            "tp_hit": "tp",
-            "manual_close": "closed_manual",
-            "liquidation": "liquidated",
-        }.get(exit_reason, "closed_manual")
-        signal.status = db_status
-        logger.info(
-            "Reconstructed missed close for signal %s: %s @ %s (pnl_r=%s)",
-            signal.id,
-            exit_reason,
-            exit_price,
-            pnl_r,
-        )
-
-        if self.governor:
-            try:
-                await self.governor.record_outcome(signal.id, pnl_r, won=pnl_r > 0)
-            except Exception:
-                logger.exception("Governor record_outcome failed for missed close %s", signal.id)
-
-    async def _reconstruct_exit_from_history(
-        self, signal: Signal, product_id: int
-    ) -> tuple[Decimal, str, Decimal]:
-        """Best-effort reconstruction of exit from order history."""
-        if self.delta_client is None:
-            return signal.stop_loss, "manual_close", Decimal("0")
-
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(hours=ORDER_HISTORY_WINDOW_HOURS)
-
+    async def _publish(self, event_type, payload: dict) -> None:
+        if self.bus is None:
+            return
         try:
-            history = await self.delta_client.get_order_history(
-                product_id=product_id,
-                start=start.isoformat(),
-                end=end.isoformat(),
-            )
-            orders = history.get("orders", []) if isinstance(history, dict) else []
-
-            for order in orders:
-                if order.get("state") != "filled":
-                    continue
-                oid = str(order.get("id", ""))
-                if oid == signal.delta_order_id:
-                    continue
-
-                avg_fill = order.get("average_fill_price") or order.get("price", "0")
-                price = Decimal(str(avg_fill))
-
-                if order.get("bracket_stop_loss_price") or order.get("stop_loss_price"):
-                    return price, "sl_hit", Decimal("0")
-                if order.get("bracket_take_profit_price") or order.get("take_profit_price"):
-                    return price, "tp_hit", Decimal("0")
-
-                if signal.stop_loss and signal.take_profit:
-                    sl_dist = abs(price - signal.stop_loss)
-                    tp_dist = abs(price - signal.take_profit)
-                    if sl_dist < tp_dist:
-                        return price, "sl_hit", Decimal("0")
-                    else:
-                        return price, "tp_hit", Decimal("0")
+            await self.bus.publish(Event.create(event_type, payload, source="reconciler"))
         except Exception:
-            logger.exception("Order history fetch failed for missed close %s", signal.id)
-
-        return signal.stop_loss, "manual_close", Decimal("0")
-
-    # ------------------------------------------------------------------
-    # case 2 & 3: orphans
-    # ------------------------------------------------------------------
-    async def _handle_orphan_position(self, session, position: dict[str, Any]) -> None:
-        symbol = position.get("product_symbol", "unknown")
-        size = position.get("size", "?")
-        entry = position.get("entry_price", "?")
-
-        msg = (
-            f"🔴 CRITICAL: Orphan position on Delta\n"
-            f"Symbol: {symbol}\n"
-            f"Size: {size}\n"
-            f"Entry: {entry}\n"
-            f"No matching signal in DB. Manual close or adopt required."
-        )
-        logger.critical(msg)
-
-        if self.telegram and self.telegram.application:
-            try:
-                await self.telegram.application.bot.send_message(
-                    chat_id=self.telegram.chat_id,
-                    text=msg,
-                )
-            except Exception:
-                logger.exception("Failed to send orphan position alert")
-
-    async def _handle_orphan_order(self, session, order: dict[str, Any]) -> None:
-        coid = order.get("client_order_id", "unknown")
-        symbol = order.get("product_symbol", "unknown")
-        state = order.get("state", "?")
-
-        msg = (
-            f"🔴 CRITICAL: Orphan order on Delta\n"
-            f"ClientOrderID: {coid}\n"
-            f"Symbol: {symbol}\n"
-            f"State: {state}\n"
-            f"No matching signal in DB. Cancel or adopt required."
-        )
-        logger.critical(msg)
-
-        if self.telegram and self.telegram.application:
-            try:
-                await self.telegram.application.bot.send_message(
-                    chat_id=self.telegram.chat_id,
-                    text=msg,
-                )
-            except Exception:
-                logger.exception("Failed to send orphan order alert")
-
-    # ------------------------------------------------------------------
-    # startup helpers
-    # ------------------------------------------------------------------
-    async def _rebuild_open_positions(self, session, delta_positions: dict[int, dict]) -> None:
-        state = await session.get(RiskState, 1)
-        if state is None:
-            state = RiskState(id=1)
-            session.add(state)
-
-        state.current_open_positions = len(delta_positions)
-        logger.info(
-            "Rebuilt current_open_positions=%d from Delta truth",
-            state.current_open_positions,
-        )
-
-    def _resolve_product_id(self, delta_symbol: str) -> int | None:
-        """Resolve a Delta symbol to product_id via symbol_map."""
-        try:
-            return self.delta_client.symbol_map._products.get(delta_symbol, {}).get("id")
-        except Exception:
-            return None
-
-    @staticmethod
-    def _compute_hold_minutes(signal: Signal) -> int:
-        created = signal.created_at
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        return int((datetime.now(timezone.utc) - created).total_seconds() / 60)
-
-    @staticmethod
-    def _compute_pnl(signal: Signal, exit_price: Decimal) -> tuple[Decimal, Decimal]:
-        entry_f = float(signal.entry)
-        stop_f = float(signal.stop_loss)
-        exit_f = float(exit_price)
-
-        if entry_f == 0 or entry_f == stop_f:
-            return Decimal("0"), Decimal("0")
-
-        if signal.side == "long":
-            pnl_pct = Decimal(str((exit_f - entry_f) / entry_f * 100))
-            pnl_r = Decimal(str((exit_f - entry_f) / (entry_f - stop_f)))
-        else:
-            pnl_pct = Decimal(str((entry_f - exit_f) / entry_f * 100))
-            pnl_r = Decimal(str((entry_f - exit_f) / (stop_f - entry_f)))
-
-        return pnl_pct, pnl_r
-
-
-# ---------------------------------------------------------------------------
-# parsing helpers
-# ---------------------------------------------------------------------------
-
-
-def _parse_positions(resp: dict) -> dict[int, dict]:
-    """Return {product_id: position_dict}."""
-    out: dict[int, dict] = {}
-    positions = resp.get("positions", []) if isinstance(resp, dict) else resp
-    for pos in positions:
-        pid = pos.get("product_id")
-        if pid is not None:
-            out[int(pid)] = pos
-    return out
-
-
-def _parse_orders(resp: dict) -> dict[str, dict]:
-    """Return {order_id: order_dict}."""
-    out: dict[str, dict] = {}
-    orders = resp.get("orders", []) if isinstance(resp, dict) else resp
-    for order in orders:
-        oid = str(order.get("id", ""))
-        if oid:
-            out[oid] = order
-    return out
+            logger.exception("publish failed")

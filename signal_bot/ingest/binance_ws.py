@@ -48,7 +48,8 @@ class DataIngestor:
     """Backfills historical candles and subscribes to live futures streams."""
 
     BACKFILL_INTERVALS = ("1m", "5m", "1h", "4h")
-    LIVE_STREAMS = ("kline_1m", "kline_5m", "aggTrade")
+    # 1h/4h streams are required: HTF swing levels must keep updating after backfill.
+    LIVE_STREAMS = ("kline_1m", "kline_5m", "kline_1h", "kline_4h", "aggTrade")
 
     def __init__(self, queue: asyncio.Queue, message_limit: int | None = None) -> None:
         self.queue = queue
@@ -56,6 +57,7 @@ class DataIngestor:
         self._counts: dict[str, int] = {}
         self._shutdown = asyncio.Event()
         self._total_received = 0
+        self.last_error: str | None = None
 
     @property
     def counts(self) -> dict[str, int]:
@@ -66,11 +68,37 @@ class DataIngestor:
         self._shutdown.set()
 
     async def run(self) -> None:
-        client = await AsyncClient.create(
-            api_key=settings.binance_api_key or None,
-            api_secret=settings.binance_api_secret or None,
-            testnet=settings.binance_testnet,
-        )
+        """Connect with backoff; a market-data outage must not take down execution.
+
+        While data is unavailable no fresh candles flow, so no signals are generated,
+        and the control room reports the market-data interlock as degraded.
+        """
+        backoff = 1.0
+        while not self._shutdown.is_set():
+            try:
+                client = await AsyncClient.create(
+                    api_key=settings.binance_api_key or None,
+                    api_secret=settings.binance_api_secret or None,
+                    testnet=settings.binance_testnet,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.last_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+                logger.error(
+                    "Binance connect failed (%s); retrying in %.0fs", self.last_error, backoff
+                )
+                try:
+                    await asyncio.wait_for(self._shutdown.wait(), timeout=backoff)
+                except TimeoutError:
+                    pass
+                backoff = min(backoff * 2, 300.0)
+                continue
+            self.last_error = None
+            await self._run_with_client(client)
+            return
+
+    async def _run_with_client(self, client: AsyncClient) -> None:
         try:
             logger.info("Starting backfill for %d symbols...", len(settings.symbols))
             await self._backfill(client)
@@ -92,7 +120,11 @@ class DataIngestor:
                     logger.exception("Failed to backfill %s %s", symbol, interval)
                     continue
 
+                now_ms = datetime.now(timezone.utc).timestamp() * 1000
                 for raw in klines:
+                    # The last REST kline is usually still forming; never mark it closed.
+                    if len(raw) > 6 and raw[6] >= now_ms:
+                        continue
                     kline = self._rest_kline_to_dataclass(symbol, interval, raw)
                     await self.queue.put(kline)
 

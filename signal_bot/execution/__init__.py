@@ -1,6 +1,5 @@
-"""Execution engine for Delta Exchange India."""
+"""Execution core: venue-neutral adapter, order state machine, engine."""
 
-from signal_bot.execution.engine import EXEC_MODE, ExecutionEngine
-from signal_bot.execution.governor import BaseGovernor, RiskGovernor
+from signal_bot.execution.engine import EXEC_MODE, ExecutionConfig, ExecutionEngine
 
-__all__ = ["EXEC_MODE", "ExecutionEngine", "BaseGovernor", "RiskGovernor"]
+__all__ = ["EXEC_MODE", "ExecutionConfig", "ExecutionEngine"]

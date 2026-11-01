@@ -1,480 +1,263 @@
-"""Tests for ExecutionEngine."""
+"""Execution engine against the simulated venue (real store, governor and bus)."""
 
-import asyncio
-import uuid
-from collections.abc import AsyncGenerator
+from datetime import timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import pytest_asyncio
 
-from signal_bot.db.models import Signal
-from signal_bot.execution.engine import EXEC_MODE, ExecutionEngine
-from signal_bot.execution.governor import BaseGovernor
+from signal_bot.execution.engine import ExecutionConfig, ExecutionEngine, client_order_id_for
+from signal_bot.execution.orders import OrderState
+from tests.harness import Harness
 
-
-# Override session-scoped DB setup from conftest.py — these are pure unit tests.
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def setup_test_db() -> AsyncGenerator[None, None]:
-    yield
+S = OrderState
 
 
-# ---------------------------------------------------------------------------
-# mocks
-# ---------------------------------------------------------------------------
+@pytest.fixture
+async def h(tmp_path):
+    harness = await Harness.create(tmp_path)
+    yield harness
+    await harness.close()
 
 
-class MockSession:
-    def __init__(self, signals: dict):
-        self._signals = signals
+def test_client_order_id_is_deterministic_and_venue_safe():
+    import uuid
 
-    async def get(self, model, id):
-        return self._signals.get(id)
-
-    async def commit(self):
-        pass
-
-    async def refresh(self, obj):
-        pass
+    sid = uuid.UUID("12345678-1234-5678-1234-567812345678")
+    assert client_order_id_for(sid) == client_order_id_for(sid)
+    assert client_order_id_for(sid).startswith("sig_")
+    assert len(client_order_id_for(sid)) == 32
 
 
-class MockSessionContext:
-    def __init__(self, signals: dict):
-        self._signals = signals
+def test_size_accounts_for_price_and_contract_value():
+    """Regression: contracts = notional / (contract_value * price), not notional / contract_value."""
+    from signal_bot.db.models import Signal
 
-    async def __aenter__(self):
-        return MockSession(self._signals)
-
-    async def __aexit__(self, *args):
-        pass
-
-
-class MockSessionFactory:
-    def __init__(self, signals: dict):
-        self.signals = signals
-
-    def __call__(self):
-        return MockSessionContext(self.signals)
-
-
-class DenyGovernor(BaseGovernor):
-    async def check(self, signal: Signal) -> tuple[bool, str | None]:
-        return False, "test_denied"
-
-
-def _make_signal(**kwargs) -> Signal:
-    defaults = {
-        "symbol": "BTCUSDT",
-        "side": "long",
-        "entry": Decimal("65000"),
-        "stop_loss": Decimal("64000"),
-        "take_profit": Decimal("67000"),
-        "leverage": 10,
-        "risk_pct": Decimal("1.0"),
-        "account_size_assumed": Decimal("10000"),
-        "est_hold_minutes": 30,
-        "status": "pending",
-    }
-    defaults.update(kwargs)
-    signal = Signal(**defaults)
-    signal.id = uuid.uuid4()
-    return signal
-
-
-def _make_delta_client(basis_shift: Decimal = Decimal("0")):
-    """Return a MagicMock DeltaClient with product metadata wired in."""
-    client = MagicMock()
-    client.symbol_map = MagicMock()
-    client.symbol_map.get_delta_symbol = MagicMock(return_value="BTCUSD")
-    client.symbol_map.get_product_id = MagicMock(return_value=27)
-    client.symbol_map.get_product = MagicMock(
-        return_value={
-            "id": 27,
-            "symbol": "BTCUSD",
-            "tick_size": "0.5",
-            "min_size": "1",
-            "contract_value": "1",
-        }
+    sig = Signal(
+        entry=Decimal("65000"),
+        stop_loss=Decimal("64000"),
+        risk_pct=Decimal("1"),
+        account_size_assumed=Decimal("10000"),
     )
+    contracts = ExecutionEngine.compute_size(sig, Decimal("0.001"))
+    notional = contracts * Decimal("0.001") * Decimal("65000")
+    assert notional == pytest.approx(
+        Decimal("6500"), rel=Decimal("1e-9")
+    )  # $100 risk / 1.538% stop
 
-    mid = Decimal("65000") + basis_shift
-    client.get_l2_orderbook = AsyncMock(
-        return_value={
-            "bids": [[str(mid - Decimal("0.5")), "10"]],
-            "asks": [[str(mid + Decimal("0.5")), "8"]],
-        }
+
+async def test_long_bracket_translated_with_basis_and_rounded(h):
+    # Delta mid is 19.55 above the Binance entry: every level shifts by it, rounded to tick 0.5
+    h.venue.set_book("BTCUSD", Decimal("65019.5"), Decimal("65020"))
+    sig = await h.make_signal(entry="65000.2", stop="64000.1", tp="67000.3")
+    order = await h.submit(sig)
+    order = await h.order_for(sig)
+    assert order.side == "buy"
+    assert order.intended_entry == Decimal("65020")
+    assert order.stop_loss_price == Decimal("64019.5")  # 64000.1 + 19.55 basis -> tick
+    assert order.take_profit_price == Decimal("67020")
+    assert order.limit_price == Decimal("65020.5")  # best ask + 1 tick (IOC)
+    assert order.state == S.FILLED
+    assert order.protective_status == "confirmed"
+    pos = h.venue.position("BTCUSD")
+    assert pos.has_stop_loss and pos.stop_loss_price == Decimal("64019.5")
+
+
+async def test_short_bracket(h):
+    sig = await h.make_signal(side="short", entry="65000", stop="66000", tp="63000")
+    await h.submit(sig)
+    order = await h.order_for(sig)
+    assert order.side == "sell"
+    assert order.limit_price == Decimal("64999")  # best bid - 1 tick
+    assert order.state == S.FILLED
+    assert h.venue.position("BTCUSD").size == -order.filled_size
+
+
+async def test_fill_mirrors_execution_details_onto_signal(h):
+    sig = await h.make_signal()
+    await h.submit(sig)
+    s = await h.signal(sig)
+    assert s.status == "triggered"
+    assert s.delta_entry_actual == Decimal("65000")
+    assert s.entry_fees_usdt > 0
+    assert s.client_order_id == client_order_id_for(sig.id)
+
+
+async def test_signal_processed_once(h):
+    sig = await h.make_signal()
+    await h.submit(sig)
+    await h.submit(sig)
+    assert h.venue.calls.get("place_order") == 1
+
+
+async def test_basis_too_wide_aborts_before_any_order(h):
+    h.venue.set_book("BTCUSD", Decimal("65199.5"), Decimal("65200"))  # 0.31 %
+    sig = await h.make_signal()
+    await h.submit(sig)
+    s = await h.signal(sig)
+    assert s.status == "cancelled" and s.cancelled_reason == "cross_venue_basis_too_wide"
+    assert "place_order" not in h.venue.calls
+
+
+async def test_size_below_min_aborts(h):
+    from signal_bot.db.models import Signal
+
+    sig = await h.make_signal()
+    async with h.raw_factory() as session:  # $0.50 of risk -> 0.5 contracts < lot size 1
+        (await session.get(Signal, sig.id)).risk_pct = Decimal("0.005")
+        await session.commit()
+    await h.submit(sig)
+    assert (await h.signal(sig)).cancelled_reason == "size_below_min"
+
+
+async def test_stale_order_book_aborts(h):
+    h.venue.faults.add("order_book", "stale_book", age_seconds=60)
+    sig = await h.make_signal()
+    await h.submit(sig)
+    assert (await h.signal(sig)).cancelled_reason == "stale_order_book"
+    assert "place_order" not in h.venue.calls
+
+
+async def test_empty_order_book_aborts(h):
+    h.venue.faults.add("order_book", "empty_book")
+    sig = await h.make_signal()
+    await h.submit(sig)
+    assert (await h.signal(sig)).cancelled_reason == "empty_order_book"
+
+
+async def test_stale_signal_is_not_executed(h):
+    sig = await h.make_signal(created_at=h.clock.now() - timedelta(minutes=30))
+    await h.submit(sig)
+    assert (await h.signal(sig)).cancelled_reason == "signal_stale"
+    assert "place_order" not in h.venue.calls
+
+
+async def test_governor_denial_cancels_without_venue_call(h):
+    await h.governor.set_kill_switch("test")
+    sig = await h.make_signal()
+    await h.submit(sig)
+    s = await h.signal(sig)
+    assert s.status == "cancelled" and s.cancelled_reason.startswith("kill_switch_active")
+    assert "place_order" not in h.venue.calls
+
+
+async def test_missing_governor_fails_closed(h):
+    h.engine.governor = None
+    sig = await h.make_signal()
+    await h.submit(sig)
+    assert (await h.signal(sig)).cancelled_reason == "no_risk_governor"
+
+
+async def test_unhealthy_governor_fails_closed(h):
+    h.governor._state_store_ok = False
+    sig = await h.make_signal()
+    await h.submit(sig)
+    assert (await h.signal(sig)).cancelled_reason == "risk_governor_unhealthy"
+
+
+async def test_governor_exception_fails_closed(h):
+    async def boom(_):
+        raise RuntimeError("bug")
+
+    h.governor.check = boom
+    sig = await h.make_signal()
+    await h.submit(sig)
+    assert (await h.signal(sig)).cancelled_reason == "risk_governor_error"
+
+
+async def test_thin_book_partial_fill_becomes_filled_with_partial_size(h):
+    h.venue.set_book("BTCUSD", Decimal("64999.5"), Decimal("65000"), size=Decimal("30"), levels=2)
+    sig = await h.make_signal()
+    await h.submit(sig)
+    order = await h.order_for(sig)
+    # 30 at best ask + 30 at ask+1tick (the IOC limit) ; the rest of 100 is cancelled
+    assert order.state == S.FILLED
+    assert order.filled_size == Decimal("60")
+    assert order.avg_fill_price == Decimal("65000.25")
+    assert h.venue.position("BTCUSD").size == Decimal("60")
+
+
+async def test_no_liquidity_within_limit_cancels(h):
+    h.venue.set_book("BTCUSD", Decimal("64999.5"), Decimal("65000"), size=Decimal("0"))
+    sig = await h.make_signal()
+    await h.submit(sig)
+    order = await h.order_for(sig)
+    assert order.state == S.CANCELLED
+    assert (await h.signal(sig)).status == "cancelled"
+    assert h.venue.position("BTCUSD") is None
+
+
+async def test_definitive_reject(h):
+    h.venue.faults.add("place_order", "reject", reason="insufficient margin")
+    sig = await h.make_signal()
+    await h.submit(sig)
+    order = await h.order_for(sig)
+    assert order.state == S.REJECTED and "insufficient margin" in order.state_reason
+
+
+async def test_auth_failure_rejects_and_opens_breaker(h):
+    h.venue.faults.add("place_order", "auth_failure")
+    sig = await h.make_signal()
+    await h.submit(sig)
+    assert (await h.order_for(sig)).state == S.REJECTED
+    assert "exchange_auth" in h.governor.breakers
+    nxt = await h.make_signal(symbol="ETHUSDT", entry="3500", stop="3450", tp="3600")
+    await h.submit(nxt)
+    assert (await h.signal(nxt)).cancelled_reason.startswith("circuit_breaker:exchange_auth")
+
+
+async def test_resting_order_times_out_and_is_cancelled(tmp_path):
+    h = await Harness.create(
+        tmp_path, config=ExecutionConfig(order_type="limit", no_fill_timeout=10)
     )
-    client.set_margin_mode = AsyncMock()
-    client.set_leverage = AsyncMock()
-    client.place_bracket_order = AsyncMock(return_value={"id": "ord-123"})
-    client.cancel_order = AsyncMock()
-    return client
-
-
-# ---------------------------------------------------------------------------
-# 1. bracket params & price translation
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_bracket_params_computed_correctly():
-    """Verify size, translated prices, and limit IOC offset are correct."""
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    delta_client = _make_delta_client(basis_shift=Decimal("50.5"))
-
-    captured: dict = {}
-
-    async def capture_place(*args, **kwargs):
-        captured["kwargs"] = kwargs
-        return {"id": "ord-123"}
-
-    delta_client.place_bracket_order = capture_place
-
-    signal = _make_signal()
-    signals[signal.id] = signal
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=asyncio.Queue(),
-        session_factory=session_factory,
-        exec_mode=EXEC_MODE.LIVE,
-    )
-    # Patch fill tracker so we don't wait 60 s
-    engine._track_order_fill = AsyncMock(return_value=True)
-    await engine._process_signal(signal)
-
-    assert signal.status == "triggered"
-    assert signal.client_order_id == f"sig_{signal.id}"
-    assert signal.delta_symbol == "BTCUSD"
-    assert signal.delta_basis == Decimal("50.5")
-    assert signal.delta_entry_intended == Decimal("65050.5")
-
-    kwargs = captured["kwargs"]
-    assert kwargs["symbol"] == "BTCUSD"
-    assert kwargs["side"] == "buy"
-
-    # size = (10000 * 0.01) / ((65000-64000)/65000) / 1 = 100 / 0.0153846... = 6500
-    assert kwargs["size"] == 6500
-
-    # limit IOC long = delta_ask + tick = 65051.0 + 0.5 = 65051.5
-    assert kwargs["entry_price"] == Decimal("65051.5")
-
-    # SL = 64000 + 50.5 = 64050.5, rounded to tick 0.5 -> 64050.5
-    assert kwargs["stop_loss_price"] == Decimal("64050.5")
-
-    # TP = 67000 + 50.5 = 67050.5
-    assert kwargs["take_profit_price"] == Decimal("67050.5")
-
-    assert kwargs["client_order_id"] == f"sig_{signal.id}"
-    assert kwargs["order_type"] == "limit_ioc"
-
-    # margin & leverage should be set once
-    delta_client.set_margin_mode.assert_awaited_once_with(27, "isolated")
-    delta_client.set_leverage.assert_awaited_once_with(27, 10)
-
-
-@pytest.mark.asyncio
-async def test_bracket_params_for_short():
-    """Verify short side uses correct sign and limit IOC price below bid."""
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    delta_client = _make_delta_client(basis_shift=Decimal("0"))
-
-    captured: dict = {}
-
-    async def capture_place(*args, **kwargs):
-        captured["kwargs"] = kwargs
-        return {"id": "ord-123"}
-
-    delta_client.place_bracket_order = capture_place
-
-    signal = _make_signal(side="short")
-    signals[signal.id] = signal
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=asyncio.Queue(),
-        session_factory=session_factory,
-        exec_mode=EXEC_MODE.LIVE,
-    )
-    engine._track_order_fill = AsyncMock(return_value=False)
-    await engine._process_signal(signal)
-
-    kwargs = captured["kwargs"]
-    assert kwargs["side"] == "sell"
-    # short limit IOC = delta_bid - tick = 64999.5 - 0.5 = 64999.0
-    assert kwargs["entry_price"] == Decimal("64999.0")
-
-
-# ---------------------------------------------------------------------------
-# 2. idempotency
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_idempotency_skips_submitted():
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    delta_client = _make_delta_client()
-    delta_client.place_bracket_order = AsyncMock()
-
-    signal = _make_signal(status="submitted")
-    signals[signal.id] = signal
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=asyncio.Queue(),
-        session_factory=session_factory,
-        exec_mode=EXEC_MODE.LIVE,
-    )
-    await engine._process_signal(signal)
-
-    delta_client.place_bracket_order.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_idempotency_skips_triggered():
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    delta_client = _make_delta_client()
-    delta_client.place_bracket_order = AsyncMock()
-
-    signal = _make_signal(status="triggered")
-    signals[signal.id] = signal
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=asyncio.Queue(),
-        session_factory=session_factory,
-        exec_mode=EXEC_MODE.LIVE,
-    )
-    await engine._process_signal(signal)
-
-    delta_client.place_bracket_order.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# 3. cross-venue basis abort
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_basis_too_wide_aborts():
-    """Delta mid is >0.15% away from Binance entry → cancel."""
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    # 2% shift — well above 0.15% threshold
-    delta_client = _make_delta_client(basis_shift=Decimal("1300"))
-    delta_client.place_bracket_order = AsyncMock()
-
-    signal = _make_signal()
-    signals[signal.id] = signal
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=asyncio.Queue(),
-        session_factory=session_factory,
-        exec_mode=EXEC_MODE.LIVE,
-    )
-    await engine._process_signal(signal)
-
-    assert signal.status == "cancelled"
-    assert signal.cancelled_reason == "cross_venue_basis_too_wide"
-    delta_client.place_bracket_order.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# 4. size below minimum
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_size_below_min_aborts():
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    delta_client = _make_delta_client()
-    delta_client.symbol_map.get_product = MagicMock(
-        return_value={
-            "id": 27,
-            "symbol": "BTCUSD",
-            "tick_size": "0.5",
-            "min_size": "20000",  # well above the computed size of ~6500
-            "contract_value": "1",
-        }
-    )
-    delta_client.place_bracket_order = AsyncMock()
-
-    signal = _make_signal()
-    signals[signal.id] = signal
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=asyncio.Queue(),
-        session_factory=session_factory,
-        exec_mode=EXEC_MODE.LIVE,
-    )
-    await engine._process_signal(signal)
-
-    assert signal.status == "cancelled"
-    assert signal.cancelled_reason == "size_below_min"
-    delta_client.place_bracket_order.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# 5. governor denial
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_governor_denial_cancels():
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    delta_client = _make_delta_client()
-    delta_client.place_bracket_order = AsyncMock()
-
-    signal = _make_signal()
-    signals[signal.id] = signal
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=asyncio.Queue(),
-        session_factory=session_factory,
-        governor=DenyGovernor(),
-        exec_mode=EXEC_MODE.LIVE,
-    )
-    await engine._process_signal(signal)
-
-    assert signal.status == "cancelled"
-    assert signal.cancelled_reason == "test_denied"
-    delta_client.place_bracket_order.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# 6. no-fill timeout
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_no_fill_timeout_expires():
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    delta_client = _make_delta_client()
-    delta_client.place_bracket_order = AsyncMock(return_value={"id": "ord-123"})
-    delta_client.cancel_order = AsyncMock()
-
-    signal = _make_signal()
-    signals[signal.id] = signal
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=asyncio.Queue(),
-        session_factory=session_factory,
-        exec_mode=EXEC_MODE.LIVE,
-        no_fill_timeout=0.15,
-    )
-    await engine._process_signal(signal)
-
-    assert signal.status == "expired_no_fill"
-    delta_client.cancel_order.assert_awaited_once_with("ord-123")
-
-
-# ---------------------------------------------------------------------------
-# 7. fill event resolves to triggered
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_fill_event_marks_triggered():
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    delta_client = _make_delta_client()
-    delta_client.place_bracket_order = AsyncMock(return_value={"id": "ord-123"})
-    delta_client.cancel_order = AsyncMock()
-
-    signal = _make_signal()
-    signals[signal.id] = signal
-
-    delta_events = asyncio.Queue()
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=delta_events,
-        session_factory=session_factory,
-        exec_mode=EXEC_MODE.LIVE,
-        no_fill_timeout=2.0,
-    )
-
-    # Start the events consumer so it can route the fill event
-    await engine.start()
-
-    # Kick off order processing in background
-    task = asyncio.create_task(engine._process_signal(signal))
-
-    # Give the engine time to reach the wait-for-fill state
-    await asyncio.sleep(0.2)
-
-    # Inject a fill event
-    await delta_events.put(
-        {
-            "channel": "private_orders",
-            "data": {
-                "client_order_id": f"sig_{signal.id}",
-                "state": "filled",
-                "average_fill_price": "65001.0",
-                "filled_size": "6500",
-                "commission": "5.2",
-            },
-        }
-    )
-
-    await asyncio.wait_for(task, timeout=3.0)
-    await engine.stop()
-
-    assert signal.status == "triggered"
-    assert signal.delta_entry_actual == Decimal("65001.0")
-    assert signal.entry_fees_usdt == Decimal("5.2")
-    # slippage = (65001 - 65000) / 65000 * 10000 = ~0.1538 bps
-    assert signal.slippage_bps is not None
-    delta_client.cancel_order.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# 8. DRY_RUN short-circuit
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dry_run_short_circuits_to_triggered():
-    signals = {}
-    session_factory = MockSessionFactory(signals)
-    delta_client = _make_delta_client()
-    delta_client.place_bracket_order = AsyncMock()
-
-    signal = _make_signal()
-    signals[signal.id] = signal
-
-    engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=asyncio.Queue(),
-        delta_events=asyncio.Queue(),
-        session_factory=session_factory,
-        exec_mode=EXEC_MODE.DRY_RUN,
-    )
-    await engine._process_signal(signal)
-
-    assert signal.status == "triggered"
-    assert signal.delta_entry_actual == signal.delta_entry_intended
-    delta_client.place_bracket_order.assert_not_called()
-    delta_client.set_margin_mode.assert_not_called()
-    delta_client.set_leverage.assert_not_called()
+    sig = await h.make_signal()
+    await h.submit(sig)
+    assert (await h.order_for(sig)).state == S.ACKNOWLEDGED
+    h.clock.advance(11)
+    await h.engine.watch_once()  # -> cancel_pending + cancel request
+    await h.drain()
+    await h.engine.watch_once()
+    order = await h.order_for(sig)
+    assert order.state == S.CANCELLED
+    assert [t.to_state for t in await h.store.transitions_for(order.client_order_id)] == [
+        "submitting",
+        "acknowledged",
+        "cancel_pending",
+        "cancelled",
+    ]
+    await h.close()
+
+
+async def test_submission_counts_toward_daily_trade_limit(h):
+    sig = await h.make_signal()
+    await h.submit(sig)
+    assert (await h.risk_state()).daily_trade_count == 1
+
+
+async def test_second_signal_on_exposed_symbol_is_refused(h):
+    """Venues net per product: a new order must never silently reduce an open trade."""
+    first = await h.make_signal()
+    await h.submit(first)
+    second = await h.make_signal(side="short", entry="65000", stop="66000", tp="63000")
+    await h.submit(second)
+    assert (await h.signal(second)).cancelled_reason == "symbol_already_exposed"
+    assert h.venue.calls["place_order"] == 1
+    assert h.venue.position("BTCUSD").size > 0
+
+
+async def test_fast_stop_out_before_protection_check_is_not_a_failure(h):
+    """The stop fills before the engine verifies it: no false kill switch."""
+    h.venue.set_book("BTCUSD", Decimal("64999.5"), Decimal("65000"), size=Decimal("1000"))
+    sig = await h.make_signal()
+    original = h.venue.positions
+
+    async def stop_out_then_report():
+        await h.venue.move_market("BTCUSD", Decimal("63900"), Decimal("63900.5"))
+        h.venue.positions = original
+        return await original()
+
+    h.venue.positions = stop_out_then_report
+    await h.submit(sig)
+    order = await h.order_for(sig)
+    assert order.protective_status == "not_required"
+    assert order.state == S.CLOSED
+    assert (await h.risk_state()).kill_switch_active is False

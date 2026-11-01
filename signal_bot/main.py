@@ -1,34 +1,59 @@
-"""Startup script: initialise schema, seed instruments, and run the full pipeline."""
+"""Startup: schema, instruments, and the full event-driven pipeline.
+
+Wiring summary (see docs/architecture.md):
+
+    Binance WS ─► ingest queue ─► QueueWriter ─(persist, then fan out)─► HTF scanner   {1h,4h}
+                                                                    ├─► microstructure {1m,5m}
+                                                                    └─► signal pipeline{1m,5m}
+    signal pipeline ─► RiskSizer ─► signal queue ─► ExecutionEngine ─► ExchangeAdapter
+                                                        ▲   (RiskGovernor gates every submit)
+    venue stream ─► EventBus (journal first) ─┬─► execution   (own queue)
+                                              ├─► outcomes    (own queue)
+                                              └─► position view (own queue, DB-independent)
+"""
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import signal
+import sys
+import tomllib
+from datetime import datetime, timezone
+from decimal import Decimal
+from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal, async_engine
-from signal_bot.db.models import Base, Instrument, Signal
+from signal_bot.db.models import Base, Instrument
 from signal_bot.delivery.telegram_bot import TelegramNotifier
 from signal_bot.delta.client import DeltaClient, DeltaWebSocket
-from signal_bot.execution.engine import EXEC_MODE, ExecutionEngine
-from signal_bot.execution.governor import BaseGovernor
+from signal_bot.events import Event, EventBus, EventType, SqlEventJournal
+from signal_bot.execution.delta_adapter import DeltaExchangeAdapter, DeltaStreamBridge
+from signal_bot.execution.engine import EXEC_MODE, ExecutionConfig, ExecutionEngine
+from signal_bot.execution.order_store import OrderStore
 from signal_bot.features.htf_levels import HtfLevelScanner
 from signal_bot.features.microstructure import MicrostructureEngine
-from signal_bot.ingest.binance_ws import DataIngestor
+from signal_bot.ingest.binance_ws import DataIngestor, Kline
+from signal_bot.observability import metrics
+from signal_bot.observability.logging import bind, configure_logging
+from signal_bot.observability.positions import PositionView
+from signal_bot.observability.server import OpsServer
+from signal_bot.observability.status import StatusService
+from signal_bot.provenance import git_info, package_version
+from signal_bot.risk.governor import RiskGovernor
 from signal_bot.signals.risk_sizer import RiskSizer
 from signal_bot.signals.sweep_detector import SweepDetector
-from signal_bot.storage.writer import QueueWriter
+from signal_bot.storage.writer import QueueWriter, candle_close_time, close_time
 from signal_bot.tracking.outcome_monitor import OutcomeMonitor
 from signal_bot.tracking.reconciliation import Reconciler
+from signal_bot.venues.paper import PaperBroker
+from signal_bot.venues.simulated import CostModel
 
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
 logger = logging.getLogger(__name__)
 
-# Known instrument defaults keyed by symbol.
 _INSTRUMENT_DEFAULTS = {
     "BTCUSDT": {
         "base_asset": "BTC",
@@ -82,25 +107,17 @@ _INSTRUMENT_DEFAULTS = {
 
 
 async def init_schema() -> None:
-    """Create all tables if they do not already exist."""
-    logger.info("Creating tables (if missing)…")
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Schema initialised.")
 
 
 async def seed_instruments() -> None:
-    """Seed the instruments table from settings.symbols."""
     async with AsyncSessionLocal() as session:
         for symbol in settings.symbols:
-            existing = await session.scalar(
-                select(Instrument.symbol).where(Instrument.symbol == symbol)
-            )
-            if existing:
-                logger.info("Instrument %s already present — skipping.", symbol)
+            if await session.scalar(select(Instrument.symbol).where(Instrument.symbol == symbol)):
                 continue
-
-            defaults = _INSTRUMENT_DEFAULTS.get(
+            d = _INSTRUMENT_DEFAULTS.get(
                 symbol,
                 {
                     "base_asset": symbol.replace("USDT", ""),
@@ -109,316 +126,353 @@ async def seed_instruments() -> None:
                     "min_qty": "0.001",
                 },
             )
-            instrument = Instrument(
-                symbol=symbol,
-                base_asset=defaults["base_asset"],
-                quote_asset=defaults["quote_asset"],
-                tick_size=defaults["tick_size"],
-                min_qty=defaults["min_qty"],
-                active=True,
-            )
-            session.add(instrument)
-            logger.info("Seeding instrument %s.", symbol)
-
+            session.add(Instrument(symbol=symbol, active=True, **d))
         await session.commit()
-    logger.info("Instrument seeding complete.")
+
+
+def load_strategy_release() -> dict:
+    path = Path(settings.strategy_config)
+    if not path.exists():
+        return {"name": "liquidity_sweep", "version": "unversioned"}
+    with path.open("rb") as fh:
+        doc = tomllib.load(fh)
+    return {"name": doc.get("name"), "version": doc.get("version"), "config_path": str(path)}
 
 
 # ---------------------------------------------------------------------------
-# Pipeline helpers
+# pipeline stages
 # ---------------------------------------------------------------------------
 
 
-async def _signal_pipeline(
+def candle_is_fresh(candle: Kline, now: datetime, max_lag_seconds: float) -> bool:
+    """Late or backfilled candles may update features but must never generate trades."""
+    return (now - candle_close_time(candle)).total_seconds() <= max_lag_seconds
+
+
+async def signal_pipeline(
     detector: SweepDetector,
     sizer: RiskSizer,
-    signal_queue: asyncio.Queue,
     candle_queue: asyncio.Queue,
-    shutdown_event: asyncio.Event,
-    counter: list,
+    signal_queue: asyncio.Queue,
+    bus: EventBus,
+    telegram: TelegramNotifier,
+    shutdown: asyncio.Event,
+    strategy: dict,
 ) -> None:
-    """Bridge: consumes closed candles, runs sweep detection, sizes signals, queues them."""
     logger.info("Signal pipeline started.")
-    while not shutdown_event.is_set():
+    while not shutdown.is_set():
         try:
-            candle = await asyncio.wait_for(candle_queue.get(), timeout=1.0)
+            candle: Kline = await asyncio.wait_for(candle_queue.get(), timeout=1.0)
         except TimeoutError:
             continue
-
         if candle.interval not in ("1m", "5m"):
             continue
-
-        candidate = await detector._evaluate(candle)
-        if candidate is None:
+        if not candle_is_fresh(candle, datetime.now(timezone.utc), settings.max_candle_lag_seconds):
+            metrics.CANDLES_DROPPED.labels("stale_for_signals").inc()
             continue
-
-        signal = await sizer.size_and_persist(
-            candidate, candle.interval, created_at=candle.open_time
-        )
-        if signal is not None:
-            await signal_queue.put(signal)
-            counter[0] += 1
-            logger.info(
-                "Signal queued: %s %s entry=%s stop=%s tp=%s leverage=%dx",
-                signal.symbol,
-                signal.side,
-                signal.entry,
-                signal.stop_loss,
-                signal.take_profit,
-                signal.leverage,
+        try:
+            candidate = await detector._evaluate(candle)
+            if candidate is None:
+                continue
+            sig = await sizer.size_and_persist(
+                candidate, candle.interval, created_at=candle.open_time
             )
-
-
-async def _run_engine(
-    engine: ExecutionEngine,
-    reconciler: Reconciler,
-    shutdown_event: asyncio.Event,
-) -> None:
-    """Start execution engine after first reconciliation, keep alive until shutdown."""
-    logger.info("Waiting for first reconciliation before starting execution engine...")
-    await reconciler.wait_for_first_run()
-    logger.info("First reconciliation complete; starting execution engine.")
-    await engine.start()
-    while not shutdown_event.is_set():
-        await asyncio.sleep(1)
-
-
-async def _run_telegram(
-    telegram: TelegramNotifier,
-    shutdown_event: asyncio.Event,
-) -> None:
-    """Start Telegram polling, keep alive until shutdown."""
-    await telegram.start()
-    while not shutdown_event.is_set():
-        await asyncio.sleep(1)
-    await telegram.stop()
-
-
-async def _run_delta_ws(
-    ws: DeltaWebSocket,
-    shutdown_event: asyncio.Event,
-) -> None:
-    """Start Delta private WebSocket, keep alive until shutdown."""
-    ws.start()
-    while not shutdown_event.is_set():
-        await asyncio.sleep(1)
-    await ws.stop()
-
-
-async def _stats_logger(
-    ingestor: DataIngestor,
-    queues: dict[str, asyncio.Queue],
-    counter: list,
-    shutdown_event: asyncio.Event,
-) -> None:
-    """Print pipeline stats every 30 seconds."""
-    while not shutdown_event.is_set():
-        await asyncio.sleep(30)
-        counts = ingestor.counts
-        async with AsyncSessionLocal() as session:
-            open_positions = await session.scalar(
-                select(func.count()).where(Signal.status == "triggered")
+        except Exception:
+            logger.exception("Signal evaluation failed for %s %s", candle.symbol, candle.interval)
+            continue
+        if sig is None:
+            continue
+        with bind(correlation_id=str(sig.id), signal_id=str(sig.id)):
+            await bus.publish(
+                Event.create(
+                    EventType.SIGNAL_GENERATED,
+                    {
+                        "signal_id": str(sig.id),
+                        "symbol": sig.symbol,
+                        "side": sig.side,
+                        "entry": sig.entry,
+                        "stop": sig.stop_loss,
+                        "take_profit": sig.take_profit,
+                        "strategy": strategy,
+                    },
+                    source="signal_pipeline",
+                    correlation_id=str(sig.id),
+                )
             )
-        logger.info(
-            "stats | ingest=%s | queues=(ingest=%d, candles=%d, signals=%d, delta=%d) "
-            "| signals_fired=%d | open_positions=%d",
-            counts,
-            queues["ingest"].qsize(),
-            queues["candles"].qsize(),
-            queues["signals"].qsize(),
-            queues["delta"].qsize(),
-            counter[0],
-            open_positions or 0,
-        )
+            await signal_queue.put(sig)
+            logger.info("Signal queued: %s %s entry=%s", sig.symbol, sig.side, sig.entry)
+        try:
+            await telegram.notify_signal(sig)
+        except Exception:
+            logger.exception("Telegram signal notification failed")
+
+
+async def housekeeping(bus: EventBus, writer: QueueWriter, shutdown: asyncio.Event) -> None:
+    """Retry buffered journal writes and refresh lag/age gauges."""
+    while not shutdown.is_set():
+        await asyncio.sleep(5)
+        if bus.pending_journal_writes:
+            try:
+                written = await bus.flush_pending()
+                logger.info("Flushed %d buffered journal events", written)
+            except Exception:
+                logger.warning(
+                    "Journal still unavailable (%d buffered)", bus.pending_journal_writes
+                )
+        now = datetime.now(timezone.utc)
+        for (symbol, interval), open_time in writer.fanout._last_forwarded.items():
+            age = (now - close_time(open_time, interval)).total_seconds()
+            metrics.MARKET_DATA_AGE.labels(symbol, interval).set(age)
+        for name, sub in bus.subscriptions.items():
+            metrics.EVENT_QUEUE_LAG.labels(name).set(sub.lag)
+
+
+async def keep_alive(coro_fn, shutdown: asyncio.Event) -> None:
+    await coro_fn()
+    while not shutdown.is_set():
+        await asyncio.sleep(1)
 
 
 # ---------------------------------------------------------------------------
-# Main orchestrator
+# orchestrator
 # ---------------------------------------------------------------------------
 
 
 async def main() -> None:
+    code = git_info()
+    configure_logging(
+        settings.log_level,
+        settings.log_format,
+        static={
+            "env": settings.exec_mode,
+            "version": package_version(),
+            "commit": code["commit"][:12],
+        },
+    )
+    problems = settings.validate_for_startup()
+    if problems:
+        for p in problems:
+            logger.critical("Configuration error: %s", p)
+        raise SystemExit(2)
+
+    live = settings.exec_mode == "live"
+    strategy = load_strategy_release()
     logger.info(
-        "Bot starting | mode=%s | delta=%s | symbols=%s | risk_pct=%s%%",
+        "Bot starting | mode=%s delta=%s symbols=%s strategy=%s@%s settings=%s",
         settings.exec_mode,
         settings.delta_mode,
         settings.symbols,
-        settings.risk_pct_per_trade,
+        strategy.get("name"),
+        strategy.get("version"),
+        settings.fingerprint(),
     )
-
     await init_schema()
     await seed_instruments()
 
-    # Shared event for graceful shutdown
-    shutdown_event = asyncio.Event()
-
-    def _request_shutdown() -> None:
-        if not shutdown_event.is_set():
-            logger.info("Shutdown signal received.")
-            shutdown_event.set()
-
-    # Register signal handlers (SIGINT works on Windows; SIGTERM may not)
+    shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, _request_shutdown)
+            loop.add_signal_handler(sig, shutdown.set)
         except (NotImplementedError, ValueError):
             pass
 
-    # Shared queues
-    ingest_queue: asyncio.Queue = asyncio.Queue()
-    signal_queue: asyncio.Queue = asyncio.Queue()
-    delta_events: asyncio.Queue = asyncio.Queue()
-
-    # Delta client (enter async context so WS feed can run)
+    bus = EventBus(SqlEventJournal(AsyncSessionLocal))
+    telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
     delta_client = DeltaClient(
-        api_key=settings.delta_api_key,
-        api_secret=settings.delta_api_secret,
-        mode=settings.delta_mode,
+        settings.delta_api_key, settings.delta_api_secret, settings.delta_mode
     )
 
-    # Telegram notifier
-    telegram = TelegramNotifier(
-        bot_token=settings.telegram_bot_token,
-        chat_id=settings.telegram_chat_id,
-    )
+    async with delta_client:  # loads Delta products (public) for symbol mapping
+        delta_adapter = DeltaExchangeAdapter(delta_client)
+        if live:
+            adapter = delta_adapter
+            mode = EXEC_MODE.LIVE
+        else:
+            adapter = PaperBroker(
+                {s: delta_adapter.instrument(s) for s in settings.symbols},
+                bus,
+                book_source=delta_adapter.order_book,
+                session_factory=AsyncSessionLocal,
+                costs=CostModel(
+                    taker_fee=Decimal(str(settings.paper_taker_fee)),
+                    maker_fee=Decimal(str(settings.paper_maker_fee)),
+                    latency_seconds=settings.paper_latency_ms / 1000,
+                    funding_rate=Decimal(str(settings.paper_funding_rate)),
+                ),
+                initial_balance=Decimal(
+                    str(settings.paper_initial_equity or settings.account_size_usdt)
+                ),
+                state_path=settings.paper_state_path,
+            )
+            adapter.restore()
+            mode = EXEC_MODE.PAPER
 
-    # Risk governor
-    governor = BaseGovernor()
+        governor = RiskGovernor(AsyncSessionLocal, exchange=adapter, telegram=telegram, bus=bus)
+        store = OrderStore(AsyncSessionLocal, bus)
+        signal_queue: asyncio.Queue = asyncio.Queue()
+        engine = ExecutionEngine(
+            adapter,
+            governor,
+            bus,
+            store,
+            signal_queue,
+            config=ExecutionConfig(
+                order_type=settings.order_type,
+                no_fill_timeout=settings.no_fill_timeout_seconds,
+                max_book_age_seconds=settings.max_book_age_seconds,
+                require_stream_on_start=live,
+            ),
+            alerts=telegram,
+            mode=mode,
+        )
+        monitor = OutcomeMonitor(bus, store, adapter, telegram_notifier=telegram, governor=governor)
+        reconciler = Reconciler(
+            adapter,
+            store,
+            governor=governor,
+            telegram=telegram,
+            outcome_monitor=monitor,
+            engine=engine,
+            bus=bus,
+            interval=settings.reconcile_interval_seconds,
+            unknown_grace_seconds=settings.unknown_order_grace_seconds,
+            block_on_orphans=settings.block_on_orphan_positions,
+        )
+        engine.reconciler = reconciler
+        position_view = PositionView(bus)
 
-    # Reconciler (started immediately so it can run before engine)
-    reconciler = Reconciler(
-        delta_client=delta_client,
-        session_factory=AsyncSessionLocal,
-        telegram=telegram,
-        governor=governor,
-    )
+        # Subscribe every durable consumer, then replay history before any stream starts.
+        replay = {}
+        for sub in (engine.subscribe(), monitor.subscribe()):
+            replay[sub.name] = await bus.replay(sub)
 
-    # Delta WebSocket feeds private order/position events into delta_events
-    delta_ws = DeltaWebSocket(delta_client, delta_events)
+        ingest_queue: asyncio.Queue = asyncio.Queue()
+        ingestor = DataIngestor(queue=ingest_queue)
+        writer = QueueWriter(source_queue=ingest_queue)
+        htf_scanner = HtfLevelScanner(candle_queue=writer.subscribe("htf_levels", {"1h", "4h"}))
+        micro_engine = MicrostructureEngine(
+            candle_queue=writer.subscribe("microstructure", {"1m", "5m"})
+        )
+        sweep_queue = writer.subscribe("signals", {"1m", "5m"})
+        detector = SweepDetector(candle_queue=sweep_queue)
+        sizer = RiskSizer()
 
-    # Ingestor: Binance klines + aggTrades
-    ingestor = DataIngestor(queue=ingest_queue)
+        stream = None
+        if live:
+            bridge = DeltaStreamBridge(bus)
+            stream = DeltaWebSocket(
+                delta_client,
+                bridge.handle_raw,
+                on_connect=bridge.on_connect,
+                on_disconnect=bridge.on_disconnect,
+            )
 
-    # Writer: batches DB inserts, emits closed-candle events
-    writer = QueueWriter(source_queue=ingest_queue)
+        status = StatusService(
+            environment={
+                "exec_mode": settings.exec_mode,
+                "venue": adapter.venue,
+                "delta_mode": settings.delta_mode,
+                "version": package_version(),
+                "commit": code["commit"],
+                "dirty": code["dirty"],
+                "strategy": strategy,
+                "settings_fingerprint": settings.fingerprint(),
+            },
+            governor=governor,
+            bus=bus,
+            order_store=store,
+            session_factory=AsyncSessionLocal,
+            reconciler=reconciler,
+            adapter=adapter,
+            position_view=position_view,
+            fanout=writer.fanout,
+            writer=writer,
+            engine=engine,
+            stream=stream,
+            ingestor=ingestor,
+            replay_counts=replay,
+            max_candle_lag_seconds=settings.max_candle_lag_seconds,
+        )
+        ops = OpsServer(
+            status,
+            governor,
+            AsyncSessionLocal,
+            operator_token=settings.operator_token,
+            host=settings.ops_host,
+            port=settings.ops_port,
+        )
+        await ops.start()
 
-    # Feature engines subscribe to closed candles
-    htf_scanner = HtfLevelScanner(candle_queue=writer.closed_candle_queue)
-    micro_engine = MicrostructureEngine(candle_queue=writer.closed_candle_queue)
-
-    # Sweep detector gets its own subscriber queue so we can bridge to sizer
-    sweep_candle_queue: asyncio.Queue = asyncio.Queue()
-    writer.subscribe(sweep_candle_queue)
-    sweep_detector = SweepDetector(candle_queue=sweep_candle_queue)
-
-    # Risk sizer (one-shot per candidate)
-    risk_sizer = RiskSizer()
-
-    # Execution engine
-    exec_mode = EXEC_MODE.LIVE if settings.exec_mode == "live" else EXEC_MODE.DRY_RUN
-    execution_engine = ExecutionEngine(
-        delta_client=delta_client,
-        signal_queue=signal_queue,
-        delta_events=delta_events,
-        governor=governor,
-        exec_mode=exec_mode,
-        reconciler=reconciler,
-    )
-
-    # Outcome monitor
-    outcome_monitor = OutcomeMonitor(
-        delta_events=delta_events,
-        telegram_notifier=telegram,
-        governor=governor,
-        delta_client=delta_client,
-    )
-
-    # Counter for signals fired since startup
-    signals_fired: list = [0]
-
-    queues = {
-        "ingest": ingest_queue,
-        "candles": writer.closed_candle_queue,
-        "signals": signal_queue,
-        "delta": delta_events,
-    }
-
-    async with delta_client:
-        # Start reconciler immediately; engine will wait for first run
+        governor.start()
         reconciler.start()
 
-        # Start all concurrent tasks
         tasks = [
             asyncio.create_task(ingestor.run(), name="ingestor"),
             asyncio.create_task(writer.run(), name="writer"),
             asyncio.create_task(htf_scanner.run(), name="htf_scanner"),
             asyncio.create_task(micro_engine.run(), name="micro_engine"),
             asyncio.create_task(
-                _signal_pipeline(
-                    sweep_detector,
-                    risk_sizer,
-                    signal_queue,
-                    sweep_candle_queue,
-                    shutdown_event,
-                    signals_fired,
+                signal_pipeline(
+                    detector, sizer, sweep_queue, signal_queue, bus, telegram, shutdown, strategy
                 ),
                 name="signal_pipeline",
             ),
-            asyncio.create_task(
-                _run_engine(execution_engine, reconciler, shutdown_event),
-                name="execution_engine",
-            ),
-            asyncio.create_task(outcome_monitor.run(), name="outcome_monitor"),
-            asyncio.create_task(
-                _run_delta_ws(delta_ws, shutdown_event),
-                name="delta_ws",
-            ),
-            asyncio.create_task(
-                _run_telegram(telegram, shutdown_event),
-                name="telegram",
-            ),
-            asyncio.create_task(
-                _stats_logger(ingestor, queues, signals_fired, shutdown_event),
-                name="stats_logger",
-            ),
+            asyncio.create_task(keep_alive(engine.start, shutdown), name="execution_engine"),
+            asyncio.create_task(monitor.run(), name="outcome_monitor"),
+            asyncio.create_task(position_view.run(), name="position_view"),
+            asyncio.create_task(keep_alive(telegram.start, shutdown), name="telegram"),
+            asyncio.create_task(housekeeping(bus, writer, shutdown), name="housekeeping"),
         ]
+        if isinstance(adapter, PaperBroker):
+            tasks.append(asyncio.create_task(adapter.run(), name="paper_broker"))
+        if stream is not None:
+            stream.start()
 
+        waiter = asyncio.create_task(shutdown.wait(), name="shutdown-wait")
         try:
-            # return_exceptions=False => one crash brings down the whole bot
-            await asyncio.gather(*tasks, return_exceptions=False)
-        except asyncio.CancelledError:
-            logger.info("Main gather cancelled.")
-        except Exception:
-            logger.exception("Fatal error in pipeline — shutting down.")
+            done, _ = await asyncio.wait([waiter, *tasks], return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                if t is not waiter and t.exception() is not None:
+                    logger.critical("Task %s crashed: %r — halting", t.get_name(), t.exception())
+                    governor.set_breaker("task_crashed", t.get_name())
         finally:
-            # Graceful shutdown sequence
             logger.info("Shutting down pipeline...")
-            shutdown_event.set()
-
-            ingestor.shutdown()
-            writer.shutdown()
-            htf_scanner.shutdown()
-            micro_engine.shutdown()
-            sweep_detector.shutdown()
-            outcome_monitor.shutdown()
-
-            await execution_engine.stop()
+            shutdown.set()
+            for component in (ingestor, writer, htf_scanner, micro_engine, detector, monitor):
+                component.shutdown()
+            position_view.stop()
+            if isinstance(adapter, PaperBroker):
+                adapter.stop()
+                await adapter.checkpoint()
+            await engine.stop()
             await reconciler.stop()
-            await delta_ws.stop()
+            await governor.stop()
+            if stream is not None:
+                await stream.stop()
             await telegram.stop()
-
-            # Cancel any lingering tasks
-            for t in tasks:
+            await ops.stop()
+            for t in [waiter, *tasks]:
                 if not t.done():
                     t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Flush pending DB writes
-            logger.info("Closing database engine.")
+            await asyncio.gather(waiter, *tasks, return_exceptions=True)
+            if bus.pending_journal_writes:
+                try:
+                    await bus.flush_pending()
+                except Exception:
+                    logger.error(
+                        "%d journal events could not be flushed", bus.pending_journal_writes
+                    )
             await async_engine.dispose()
             logger.info("Shutdown complete.")
 
 
+def cli() -> None:
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    cli()
