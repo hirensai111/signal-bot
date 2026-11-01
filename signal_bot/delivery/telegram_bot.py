@@ -2,7 +2,6 @@
 
 import logging
 from datetime import datetime, timezone
-from decimal import Decimal
 
 from sqlalchemy import select
 from telegram import Update
@@ -29,9 +28,7 @@ class TelegramNotifier:
         if not self.bot_token:
             logger.warning("TELEGRAM_BOT_TOKEN is not set.")
         self.application = (
-            Application.builder().token(self.bot_token).build()
-            if self.bot_token
-            else None
+            Application.builder().token(self.bot_token).build() if self.bot_token else None
         )
 
     async def start(self) -> None:
@@ -133,14 +130,10 @@ class TelegramNotifier:
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         async with AsyncSessionLocal() as session:
-            open_result = await session.execute(
-                select(Signal).where(Signal.status == "triggered")
-            )
+            open_result = await session.execute(select(Signal).where(Signal.status == "triggered"))
             open_signals = open_result.scalars().all()
 
-            today = datetime.now(timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             outcome_result = await session.execute(
                 select(SignalOutcome, Signal)
                 .join(Signal, SignalOutcome.signal_id == Signal.id)

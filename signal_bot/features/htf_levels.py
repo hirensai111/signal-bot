@@ -3,7 +3,7 @@
 import argparse
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -40,10 +40,8 @@ class HtfLevelScanner:
         logger.info("HTF scanner started (lookback=%d).", self.lookback)
         while not self._shutdown.is_set():
             try:
-                candle = await asyncio.wait_for(
-                    self.candle_queue.get(), timeout=1.0
-                )
-            except asyncio.TimeoutError:
+                candle = await asyncio.wait_for(self.candle_queue.get(), timeout=1.0)
+            except TimeoutError:
                 continue
 
             if candle.interval not in ("1h", "4h"):
@@ -69,31 +67,38 @@ class HtfLevelScanner:
         candidate = candles[idx]
 
         is_swing_high = all(
-            candidate.high > candles[i].high
-            for i in range(idx - n, idx + n + 1)
-            if i != idx
+            candidate.high > candles[i].high for i in range(idx - n, idx + n + 1) if i != idx
         )
         is_swing_low = all(
-            candidate.low < candles[i].low
-            for i in range(idx - n, idx + n + 1)
-            if i != idx
+            candidate.low < candles[i].low for i in range(idx - n, idx + n + 1) if i != idx
         )
 
         async with self.session_factory() as session:
             if is_swing_high:
                 await self._save_level(
-                    session, candle.symbol, candle.interval,
-                    "swing_high", candidate.high, candidate.open_time,
+                    session,
+                    candle.symbol,
+                    candle.interval,
+                    "swing_high",
+                    candidate.high,
+                    candidate.open_time,
                 )
             if is_swing_low:
                 await self._save_level(
-                    session, candle.symbol, candle.interval,
-                    "swing_low", candidate.low, candidate.open_time,
+                    session,
+                    candle.symbol,
+                    candle.interval,
+                    "swing_low",
+                    candidate.low,
+                    candidate.open_time,
                 )
 
             await session.flush()
             await self._update_broken_levels(
-                session, candle.symbol, candle.interval, candle,
+                session,
+                candle.symbol,
+                candle.interval,
+                candle,
             )
             await self._prune_levels(session, candle.symbol, candle.interval)
             await session.commit()
@@ -130,7 +135,11 @@ class HtfLevelScanner:
         session.add(level)
         logger.info(
             "New %s level: %s %s @ %s (formed %s)",
-            level_type, symbol, interval, price, formed_at,
+            level_type,
+            symbol,
+            interval,
+            price,
+            formed_at,
         )
 
     async def _update_broken_levels(
@@ -155,7 +164,10 @@ class HtfLevelScanner:
             level.broken_at = candle.open_time
             logger.info(
                 "Swing high broken: %s %s @ %s by close %s",
-                symbol, interval, level.price, candle.close,
+                symbol,
+                interval,
+                level.price,
+                candle.close,
             )
 
         # Swing low broken when close moves below the level
@@ -173,7 +185,10 @@ class HtfLevelScanner:
             level.broken_at = candle.open_time
             logger.info(
                 "Swing low broken: %s %s @ %s by close %s",
-                symbol, interval, level.price, candle.close,
+                symbol,
+                interval,
+                level.price,
+                candle.close,
             )
 
     async def _prune_levels(self, session, symbol: str, interval: str) -> None:
@@ -206,9 +221,7 @@ async def print_active_levels(symbol: str, timeframe: str) -> None:
         levels = result.scalars().all()
         print(f"Active HTF levels for {symbol.upper()} {timeframe.lower()}: {len(levels)}")
         for lvl in levels:
-            print(
-                f"  [{lvl.level_type:12}] @ {lvl.price:>16}  formed {lvl.formed_at.isoformat()}"
-            )
+            print(f"  [{lvl.level_type:12}] @ {lvl.price:>16}  formed {lvl.formed_at.isoformat()}")
 
 
 def main() -> None:

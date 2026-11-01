@@ -1,13 +1,11 @@
 """Tests for database models and schema creation."""
 
-import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-import pytest
 from sqlalchemy import select
 
-from db.models import (
+from signal_bot.db.models import (
     AggTrade,
     Candle1m,
     Candle5m,
@@ -31,9 +29,7 @@ class TestInstrument:
         db_session.add(inst)
         await db_session.commit()
 
-        fetched = await db_session.scalar(
-            select(Instrument).where(Instrument.symbol == "TESTUSDT")
-        )
+        fetched = await db_session.scalar(select(Instrument).where(Instrument.symbol == "TESTUSDT"))
         assert fetched is not None
         assert fetched.base_asset == "TEST"
         assert fetched.tick_size == Decimal("0.01")
@@ -130,9 +126,7 @@ class TestHtfLevels:
         db_session.add(level)
         await db_session.commit()
 
-        fetched = await db_session.scalar(
-            select(HtfLevel).where(HtfLevel.symbol == "LINKUSDT")
-        )
+        fetched = await db_session.scalar(select(HtfLevel).where(HtfLevel.symbol == "LINKUSDT"))
         assert fetched is not None
         assert fetched.level_type == "swing_high"
         assert fetched.broken_at is None
@@ -171,9 +165,7 @@ class TestSignals:
         db_session.add(outcome)
         await db_session.commit()
 
-        fetched_signal = await db_session.scalar(
-            select(Signal).where(Signal.id == signal.id)
-        )
+        fetched_signal = await db_session.scalar(select(Signal).where(Signal.id == signal.id))
         assert fetched_signal is not None
         assert fetched_signal.outcome is not None
         assert fetched_signal.outcome.exit_reason == "tp"

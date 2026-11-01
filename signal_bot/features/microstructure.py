@@ -8,10 +8,11 @@ from decimal import Decimal
 import pandas as pd
 from sqlalchemy import func, select
 
-from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal
 from signal_bot.db.models import (
     AggTrade as AggTradeModel,
+)
+from signal_bot.db.models import (
     Candle1m,
     Candle5m,
     CandleFeature,
@@ -44,10 +45,8 @@ class MicrostructureEngine:
         logger.info("Microstructure engine started.")
         while not self._shutdown.is_set():
             try:
-                candle = await asyncio.wait_for(
-                    self.candle_queue.get(), timeout=1.0
-                )
-            except asyncio.TimeoutError:
+                candle = await asyncio.wait_for(self.candle_queue.get(), timeout=1.0)
+            except TimeoutError:
                 continue
 
             if candle.interval not in ("1m", "5m"):

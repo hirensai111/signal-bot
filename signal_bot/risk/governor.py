@@ -1,6 +1,5 @@
 """Production risk governor with kill switch, daily limits, and Telegram alerts."""
 
-import __main__
 import argparse
 import asyncio
 import logging
@@ -8,14 +7,12 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import func, select
 
 from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal
 from signal_bot.db.models import RiskState, Signal
-from signal_bot.execution.governor import RiskGovernor as RiskGovernorProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +48,24 @@ class RiskGovernor:
         self.telegram = telegram
 
         self.daily_loss_limit_r = Decimal(
-            str(daily_loss_limit_r if daily_loss_limit_r is not None else settings.daily_loss_limit_r)
+            str(
+                daily_loss_limit_r
+                if daily_loss_limit_r is not None
+                else settings.daily_loss_limit_r
+            )
         )
-        self.max_trades_per_day = max_trades_per_day if max_trades_per_day is not None else settings.max_trades_per_day
+        self.max_trades_per_day = (
+            max_trades_per_day if max_trades_per_day is not None else settings.max_trades_per_day
+        )
         self.max_concurrent_positions = (
-            max_concurrent_positions if max_concurrent_positions is not None else settings.max_concurrent_positions
+            max_concurrent_positions
+            if max_concurrent_positions is not None
+            else settings.max_concurrent_positions
         )
         self.max_consecutive_losses = (
-            max_consecutive_losses if max_consecutive_losses is not None else settings.max_consecutive_losses
+            max_consecutive_losses
+            if max_consecutive_losses is not None
+            else settings.max_consecutive_losses
         )
         self.min_balance_usdt = Decimal(
             str(min_balance_usdt if min_balance_usdt is not None else settings.min_balance_usdt)
@@ -68,7 +75,7 @@ class RiskGovernor:
         self._alert_cooldown: dict[str, datetime] = {}
 
         # Balance cache
-        self._balance_cache: Optional[Decimal] = None
+        self._balance_cache: Decimal | None = None
         self._balance_cache_time: float = 0.0
 
         self._running = False
@@ -101,7 +108,7 @@ class RiskGovernor:
     # ------------------------------------------------------------------
     # pre-trade check
     # ------------------------------------------------------------------
-    async def check(self, signal: Optional[Signal] = None) -> tuple[bool, Optional[str]]:
+    async def check(self, signal: Signal | None = None) -> tuple[bool, str | None]:
         async with self.session_factory() as session:
             state = await self._get_state(session)
 
@@ -140,10 +147,7 @@ class RiskGovernor:
 
             balance = await self._get_balance()
             if balance < self.min_balance_usdt:
-                return False, (
-                    f"min_balance_usdt breached: "
-                    f"{balance} < {self.min_balance_usdt}"
-                )
+                return False, (f"min_balance_usdt breached: {balance} < {self.min_balance_usdt}")
 
             await session.commit()
             return True, None
@@ -328,6 +332,7 @@ class RiskGovernor:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 async def _cli_kill(reason: str) -> None:
     gov = RiskGovernor()

@@ -3,10 +3,9 @@
 import asyncio
 import enum
 import logging
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Optional
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
-from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal
 from signal_bot.db.models import Signal
 from signal_bot.delta.client import DeltaClient
@@ -34,7 +33,7 @@ class ExecutionEngine:
         signal_queue: asyncio.Queue,
         delta_events: asyncio.Queue,
         session_factory=None,
-        governor: Optional[RiskGovernor] = None,
+        governor: RiskGovernor | None = None,
         exec_mode: EXEC_MODE = EXEC_MODE.DRY_RUN,
         no_fill_timeout: float = NO_FILL_TIMEOUT,
         order_type: str = "limit_ioc",
@@ -95,7 +94,7 @@ class ExecutionEngine:
         while self._running:
             try:
                 signal: Signal = await asyncio.wait_for(self.signal_queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             try:
                 await self._process_signal(signal)
@@ -109,24 +108,48 @@ class ExecutionEngine:
         client_order_id = f"sig_{signal.id}"
 
         # 1. idempotency / restart-safety
-        if signal.status in ("submitted", "triggered", "sl", "tp", "expired", "expired_no_fill", "cancelled"):
+        if signal.status in (
+            "submitted",
+            "triggered",
+            "sl",
+            "tp",
+            "expired",
+            "expired_no_fill",
+            "cancelled",
+        ):
             logger.debug("Signal %s already at status=%s — skipping", signal.id, signal.status)
             return
         if signal.client_order_id is not None:
-            logger.debug("Signal %s already has client_order_id=%s — skipping", signal.id, signal.client_order_id)
+            logger.debug(
+                "Signal %s already has client_order_id=%s — skipping",
+                signal.id,
+                signal.client_order_id,
+            )
             return
 
         async with self.session_factory() as session:
             # Re-fetch inside transaction to avoid stale object
-            fresh: Optional[Signal] = await session.get(Signal, signal.id)
+            fresh: Signal | None = await session.get(Signal, signal.id)
             if fresh is None:
                 logger.warning("Signal %s not found in DB", signal.id)
                 return
-            if fresh.status in ("submitted", "triggered", "sl", "tp", "expired", "expired_no_fill", "cancelled"):
+            if fresh.status in (
+                "submitted",
+                "triggered",
+                "sl",
+                "tp",
+                "expired",
+                "expired_no_fill",
+                "cancelled",
+            ):
                 logger.debug("Signal %s already at status=%s — skipping", signal.id, fresh.status)
                 return
             if fresh.client_order_id is not None:
-                logger.debug("Signal %s already has client_order_id=%s — skipping", signal.id, fresh.client_order_id)
+                logger.debug(
+                    "Signal %s already has client_order_id=%s — skipping",
+                    signal.id,
+                    fresh.client_order_id,
+                )
                 return
 
             # 2. risk governor pre-flight
@@ -156,7 +179,11 @@ class ExecutionEngine:
             if self.exec_mode == EXEC_MODE.LIVE:
                 await self._setup_margin_and_leverage(fresh.symbol, product_id, fresh.leverage)
             else:
-                logger.info("[DRY_RUN] Would set margin=isolated, leverage=%dx for %s", fresh.leverage, fresh.symbol)
+                logger.info(
+                    "[DRY_RUN] Would set margin=isolated, leverage=%dx for %s",
+                    fresh.leverage,
+                    fresh.symbol,
+                )
 
             # 5. fetch Delta prices & compute basis
             if self.exec_mode == EXEC_MODE.LIVE:
@@ -362,7 +389,7 @@ class ExecutionEngine:
 
                 try:
                     await asyncio.wait_for(event_set.wait(), timeout=remaining)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
                 event_set.clear()
@@ -372,7 +399,9 @@ class ExecutionEngine:
 
                 state = event.get("state", "")
                 if state == "filled":
-                    avg_price = Decimal(str(event.get("average_fill_price", event.get("price", "0"))))
+                    avg_price = Decimal(
+                        str(event.get("average_fill_price", event.get("price", "0")))
+                    )
                     filled_size = Decimal(str(event.get("filled_size", "0")))
                     fee = Decimal(str(event.get("commission", event.get("fee", "0"))))
                     async with self.session_factory() as session:
@@ -381,7 +410,9 @@ class ExecutionEngine:
                             fresh.delta_entry_actual = avg_price
                             fresh.entry_fees_usdt = fee
                             if fresh.delta_entry_intended and fresh.delta_entry_intended != 0:
-                                slippage = (avg_price - fresh.delta_entry_intended) / fresh.delta_entry_intended
+                                slippage = (
+                                    avg_price - fresh.delta_entry_intended
+                                ) / fresh.delta_entry_intended
                                 fresh.slippage_bps = slippage * Decimal("10000")
                             await session.commit()
                     filled = True
@@ -406,7 +437,7 @@ class ExecutionEngine:
         while self._running:
             try:
                 event = await asyncio.wait_for(self.delta_events.get(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
             if event.get("channel") != "private_orders":

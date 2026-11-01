@@ -6,7 +6,6 @@ import signal
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional
 
 from binance import AsyncClient, BinanceSocketManager
 
@@ -51,7 +50,7 @@ class DataIngestor:
     BACKFILL_INTERVALS = ("1m", "5m", "1h", "4h")
     LIVE_STREAMS = ("kline_1m", "kline_5m", "aggTrade")
 
-    def __init__(self, queue: asyncio.Queue, message_limit: Optional[int] = None) -> None:
+    def __init__(self, queue: asyncio.Queue, message_limit: int | None = None) -> None:
         self.queue = queue
         self.message_limit = message_limit
         self._counts: dict[str, int] = {}
@@ -102,9 +101,7 @@ class DataIngestor:
     async def _websocket_loop(self, client: AsyncClient) -> None:
         bsm = BinanceSocketManager(client)
         streams = [
-            f"{sym.lower()}@{stream}"
-            for sym in settings.symbols
-            for stream in self.LIVE_STREAMS
+            f"{sym.lower()}@{stream}" for sym in settings.symbols for stream in self.LIVE_STREAMS
         ]
 
         backoff = 1.0

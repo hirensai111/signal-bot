@@ -10,9 +10,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from signal_bot.config import settings
-from signal_bot.db.models import Signal, SignalOutcome
-from signal_bot.db.models import Base
+from signal_bot.db.models import Base, Signal, SignalOutcome
 from signal_bot.tracking.outcome_monitor import OutcomeMonitor
 
 TEST_DB_URL = "sqlite+aiosqlite:///./signal_bot_test_outcome.db"
@@ -151,7 +149,6 @@ async def test_position_close_triggers_outcome() -> None:
 
 @pytest.mark.asyncio
 async def test_orphan_close_logs_critical(caplog) -> None:
-    import logging
 
     delta_events = asyncio.Queue()
     monitor = OutcomeMonitor(delta_events, session_factory=TestSessionLocal)
@@ -376,12 +373,14 @@ async def test_daily_summary_metrics() -> None:
     monitor = OutcomeMonitor(asyncio.Queue(), session_factory=TestSessionLocal)
 
     async with TestSessionLocal() as session:
-        for i, (pnl_r, reason) in enumerate([
-            (Decimal("2.0"), "tp"),
-            (Decimal("-1.0"), "sl"),
-            (Decimal("1.5"), "tp"),
-            (Decimal("-0.5"), "sl"),
-        ]):
+        for _i, (pnl_r, reason) in enumerate(
+            [
+                (Decimal("2.0"), "tp"),
+                (Decimal("-1.0"), "sl"),
+                (Decimal("1.5"), "tp"),
+                (Decimal("-0.5"), "sl"),
+            ]
+        ):
             s = Signal(
                 symbol="BTCUSDT",
                 side="long",

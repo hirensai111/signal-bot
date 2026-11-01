@@ -4,7 +4,6 @@ import logging
 import math
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal
@@ -28,11 +27,15 @@ class RiskSizer:
         hold_time_map: dict[str, int] | None = None,
     ) -> None:
         self.session_factory = session_factory or AsyncSessionLocal
-        self.account_size = Decimal(str(account_size)) if account_size is not None else Decimal(
-            str(settings.account_size_usdt)
+        self.account_size = (
+            Decimal(str(account_size))
+            if account_size is not None
+            else Decimal(str(settings.account_size_usdt))
         )
-        self.risk_pct = Decimal(str(risk_pct)) if risk_pct is not None else Decimal(
-            str(settings.risk_pct_per_trade)
+        self.risk_pct = (
+            Decimal(str(risk_pct))
+            if risk_pct is not None
+            else Decimal(str(settings.risk_pct_per_trade))
         )
         self.max_leverage = max_leverage if max_leverage is not None else settings.max_leverage
         self.hold_time_map = hold_time_map or dict(self.DEFAULT_HOLD_MINUTES)
@@ -42,7 +45,7 @@ class RiskSizer:
         candidate: SignalCandidate,
         interval: str,
         created_at: datetime | None = None,
-    ) -> Optional[Signal]:
+    ) -> Signal | None:
         """Compute size, cap leverage, and persist. Returns None if leverage exceeds max."""
         risk_amount = self.account_size * self.risk_pct / Decimal("100")
         stop_distance_pct = abs(candidate.entry - candidate.stop) / candidate.entry

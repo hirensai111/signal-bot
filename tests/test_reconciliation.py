@@ -12,10 +12,8 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from signal_bot.config import settings
-from signal_bot.db.models import RiskState, Signal, SignalOutcome
+from signal_bot.db.models import Base, RiskState, Signal, SignalOutcome
 from signal_bot.execution.engine import EXEC_MODE, ExecutionEngine
-from signal_bot.db.models import Base
 from signal_bot.tracking.reconciliation import Reconciler
 
 TEST_DB_URL = "sqlite+aiosqlite:///./signal_bot_test_recon.db"
@@ -86,11 +84,13 @@ async def _seed_signal(
 async def test_synced_state_nothing_to_do() -> None:
     """When Delta and DB match, reconciler makes no changes."""
     delta_client = _make_delta_client()
-    delta_client.get_open_positions = AsyncMock(return_value={
-        "positions": [
-            {"product_id": 27, "size": "10", "product_symbol": "BTCUSD", "entry_price": "100"}
-        ]
-    })
+    delta_client.get_open_positions = AsyncMock(
+        return_value={
+            "positions": [
+                {"product_id": 27, "size": "10", "product_symbol": "BTCUSD", "entry_price": "100"}
+            ]
+        }
+    )
     delta_client.get_open_orders = AsyncMock(return_value={"orders": []})
 
     reconciler = Reconciler(delta_client, session_factory=TestSessionLocal)
@@ -115,13 +115,15 @@ async def test_missed_fill_order_filled() -> None:
     delta_client = _make_delta_client()
     delta_client.get_open_positions = AsyncMock(return_value={"positions": []})
     delta_client.get_open_orders = AsyncMock(return_value={"orders": []})
-    delta_client.get_order_status = AsyncMock(return_value={
-        "order": {
-            "id": "ord-123",
-            "state": "filled",
-            "average_fill_price": "100.5",
+    delta_client.get_order_status = AsyncMock(
+        return_value={
+            "order": {
+                "id": "ord-123",
+                "state": "filled",
+                "average_fill_price": "100.5",
+            }
         }
-    })
+    )
 
     reconciler = Reconciler(delta_client, session_factory=TestSessionLocal)
 
@@ -149,9 +151,9 @@ async def test_missed_fill_order_cancelled() -> None:
     delta_client = _make_delta_client()
     delta_client.get_open_positions = AsyncMock(return_value={"positions": []})
     delta_client.get_open_orders = AsyncMock(return_value={"orders": []})
-    delta_client.get_order_status = AsyncMock(return_value={
-        "order": {"id": "ord-123", "state": "cancelled"}
-    })
+    delta_client.get_order_status = AsyncMock(
+        return_value={"order": {"id": "ord-123", "state": "cancelled"}}
+    )
 
     reconciler = Reconciler(delta_client, session_factory=TestSessionLocal)
 
@@ -178,17 +180,19 @@ async def test_missed_close_reconstructs_outcome() -> None:
     delta_client = _make_delta_client()
     delta_client.get_open_positions = AsyncMock(return_value={"positions": []})
     delta_client.get_open_orders = AsyncMock(return_value={"orders": []})
-    delta_client.get_order_history = AsyncMock(return_value={
-        "orders": [
-            {"id": "ord-entry", "state": "filled", "average_fill_price": "100"},
-            {
-                "id": "ord-tp",
-                "state": "filled",
-                "average_fill_price": "102",
-                "bracket_take_profit_price": "102",
-            },
-        ]
-    })
+    delta_client.get_order_history = AsyncMock(
+        return_value={
+            "orders": [
+                {"id": "ord-entry", "state": "filled", "average_fill_price": "100"},
+                {
+                    "id": "ord-tp",
+                    "state": "filled",
+                    "average_fill_price": "102",
+                    "bracket_take_profit_price": "102",
+                },
+            ]
+        }
+    )
 
     governor = MagicMock()
     governor.record_outcome = AsyncMock()
@@ -229,11 +233,13 @@ async def test_missed_close_reconstructs_outcome() -> None:
 async def test_orphan_position_creates_alert() -> None:
     """Delta has a position with no matching signal → CRITICAL alert."""
     delta_client = _make_delta_client()
-    delta_client.get_open_positions = AsyncMock(return_value={
-        "positions": [
-            {"product_id": 27, "size": "10", "product_symbol": "BTCUSD", "entry_price": "100"}
-        ]
-    })
+    delta_client.get_open_positions = AsyncMock(
+        return_value={
+            "positions": [
+                {"product_id": 27, "size": "10", "product_symbol": "BTCUSD", "entry_price": "100"}
+            ]
+        }
+    )
     delta_client.get_open_orders = AsyncMock(return_value={"orders": []})
 
     telegram = MagicMock()
@@ -263,16 +269,18 @@ async def test_orphan_order_creates_alert() -> None:
     """Delta has an open order with sig_ prefix but no matching signal."""
     delta_client = _make_delta_client()
     delta_client.get_open_positions = AsyncMock(return_value={"positions": []})
-    delta_client.get_open_orders = AsyncMock(return_value={
-        "orders": [
-            {
-                "id": "ord-999",
-                "client_order_id": "sig_orphan",
-                "product_symbol": "BTCUSD",
-                "state": "open",
-            }
-        ]
-    })
+    delta_client.get_open_orders = AsyncMock(
+        return_value={
+            "orders": [
+                {
+                    "id": "ord-999",
+                    "client_order_id": "sig_orphan",
+                    "product_symbol": "BTCUSD",
+                    "state": "open",
+                }
+            ]
+        }
+    )
 
     telegram = MagicMock()
     telegram.application = MagicMock()
@@ -299,14 +307,18 @@ async def test_orphan_order_creates_alert() -> None:
 async def test_startup_rebuilds_open_positions() -> None:
     """On startup, risk_state.current_open_positions is rebuilt from Delta."""
     delta_client = _make_delta_client()
-    delta_client.get_open_positions = AsyncMock(return_value={
-        "positions": [
-            {"product_id": 27, "size": "5", "product_symbol": "BTCUSD"},
-            {"product_id": 28, "size": "3", "product_symbol": "ETHUSD"},
-        ]
-    })
+    delta_client.get_open_positions = AsyncMock(
+        return_value={
+            "positions": [
+                {"product_id": 27, "size": "5", "product_symbol": "BTCUSD"},
+                {"product_id": 28, "size": "3", "product_symbol": "ETHUSD"},
+            ]
+        }
+    )
     delta_client.get_open_orders = AsyncMock(return_value={"orders": []})
-    delta_client.symbol_map.get_binance_symbol = MagicMock(side_effect=lambda s: s.replace("USD", "USDT"))
+    delta_client.symbol_map.get_binance_symbol = MagicMock(
+        side_effect=lambda s: s.replace("USD", "USDT")
+    )
     delta_client.symbol_map._products = {"BTCUSD": {"id": 27}, "ETHUSD": {"id": 28}}
 
     reconciler = Reconciler(delta_client, session_factory=TestSessionLocal)

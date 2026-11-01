@@ -1,18 +1,16 @@
 """Tests for the backtest runner."""
 
-import asyncio
 import tempfile
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from signal_bot.backtest.runner import BacktestRunner
 from signal_bot.config import settings
-from signal_bot.db.models import Base
 from signal_bot.signals.sweep_detector import SignalCandidate, SweepDetector
 
 TEST_DB_URL = settings.database_url.rsplit("/", 1)[0] + "/signal_bot_test"
@@ -42,19 +40,21 @@ def _make_candles(symbol: str, start: datetime, n: int, base_price: float = 100.
         if i == n - 1:
             h = base_price + 2.0
             c = base_price + 1.5
-        candles.append({
-            "symbol": symbol,
-            "open_time": start + timedelta(minutes=i),
-            "open": Decimal(str(o)),
-            "high": Decimal(str(h)),
-            "low": Decimal(str(l)),
-            "close": Decimal(str(c)),
-            "volume": Decimal("100" if i == n - 1 else "10"),
-            "quote_volume": Decimal("10000" if i == n - 1 else "1000"),
-            "trade_count": 50 if i == n - 1 else 5,
-            "taker_buy_volume": Decimal("50" if i == n - 1 else "5"),
-            "closed": True,
-        })
+        candles.append(
+            {
+                "symbol": symbol,
+                "open_time": start + timedelta(minutes=i),
+                "open": Decimal(str(o)),
+                "high": Decimal(str(h)),
+                "low": Decimal(str(l)),
+                "close": Decimal(str(c)),
+                "volume": Decimal("100" if i == n - 1 else "10"),
+                "quote_volume": Decimal("10000" if i == n - 1 else "1000"),
+                "trade_count": 50 if i == n - 1 else 5,
+                "taker_buy_volume": Decimal("50" if i == n - 1 else "5"),
+                "closed": True,
+            }
+        )
     return candles
 
 
@@ -63,15 +63,17 @@ def _make_trades(symbol: str, start: datetime, n: int):
     trades = []
     for i in range(n):
         ts = start + timedelta(minutes=i, seconds=30)
-        trades.append({
-            "symbol": symbol,
-            "trade_id": i + 1,
-            "price": Decimal("100"),
-            "qty": Decimal("5"),
-            "quote_qty": Decimal("500"),
-            "ts": ts,
-            "is_buyer_maker": i % 2 == 0,
-        })
+        trades.append(
+            {
+                "symbol": symbol,
+                "trade_id": i + 1,
+                "price": Decimal("100"),
+                "qty": Decimal("5"),
+                "quote_qty": Decimal("500"),
+                "ts": ts,
+                "is_buyer_maker": i % 2 == 0,
+            }
+        )
     return trades
 
 
@@ -147,8 +149,6 @@ async def test_slippage_and_fee_math() -> None:
     from signal_bot.backtest.runner import (
         ENTRY_FEE,
         ENTRY_SLIPPAGE,
-        EXPIRED_FEE,
-        EXPIRED_SLIPPAGE,
         SL_FEE,
         SL_SLIPPAGE,
         TP_FEE,
@@ -158,6 +158,7 @@ async def test_slippage_and_fee_math() -> None:
     runner = BacktestRunner("BTCUSDT", datetime.now(timezone.utc), datetime.now(timezone.utc), "1m")
 
     from signal_bot.db.models import Signal
+
     signal = Signal(
         symbol="BTCUSDT",
         side="long",
@@ -194,6 +195,7 @@ async def test_slippage_and_fee_math() -> None:
     gross_sl = (exit_slipped_sl - entry_slipped) / entry_slipped
     cost_sl = ENTRY_FEE + ENTRY_SLIPPAGE + SL_FEE + SL_SLIPPAGE
     net_sl = gross_sl - cost_sl
+    assert net_sl < gross_sl
     assert cost_sl == Decimal("0.0020")  # 0.05% + 0.05% + 0.05% + 0.05%
 
     # Short side
@@ -228,11 +230,18 @@ async def test_exit_check_logic() -> None:
 
     # SL hit
     candle = Kline(
-        symbol="BTCUSDT", interval="1m",
+        symbol="BTCUSDT",
+        interval="1m",
         open_time=datetime(2024, 1, 1, 0, 5, tzinfo=timezone.utc),
-        open=Decimal("100"), high=Decimal("100"), low=Decimal("98.5"), close=Decimal("99"),
-        volume=Decimal("10"), quote_volume=Decimal("1000"), trade_count=5,
-        taker_buy_volume=Decimal("5"), closed=True,
+        open=Decimal("100"),
+        high=Decimal("100"),
+        low=Decimal("98.5"),
+        close=Decimal("99"),
+        volume=Decimal("10"),
+        quote_volume=Decimal("1000"),
+        trade_count=5,
+        taker_buy_volume=Decimal("5"),
+        closed=True,
     )
     info = runner._check_exit(signal, candle)
     assert info is not None
@@ -241,11 +250,18 @@ async def test_exit_check_logic() -> None:
 
     # TP hit
     candle = Kline(
-        symbol="BTCUSDT", interval="1m",
+        symbol="BTCUSDT",
+        interval="1m",
         open_time=datetime(2024, 1, 1, 0, 5, tzinfo=timezone.utc),
-        open=Decimal("100"), high=Decimal("102.5"), low=Decimal("100"), close=Decimal("102"),
-        volume=Decimal("10"), quote_volume=Decimal("1000"), trade_count=5,
-        taker_buy_volume=Decimal("5"), closed=True,
+        open=Decimal("100"),
+        high=Decimal("102.5"),
+        low=Decimal("100"),
+        close=Decimal("102"),
+        volume=Decimal("10"),
+        quote_volume=Decimal("1000"),
+        trade_count=5,
+        taker_buy_volume=Decimal("5"),
+        closed=True,
     )
     info = runner._check_exit(signal, candle)
     assert info is not None
@@ -253,22 +269,36 @@ async def test_exit_check_logic() -> None:
 
     # No hit
     candle = Kline(
-        symbol="BTCUSDT", interval="1m",
+        symbol="BTCUSDT",
+        interval="1m",
         open_time=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
-        open=Decimal("100"), high=Decimal("100.5"), low=Decimal("99.5"), close=Decimal("100"),
-        volume=Decimal("10"), quote_volume=Decimal("1000"), trade_count=5,
-        taker_buy_volume=Decimal("5"), closed=True,
+        open=Decimal("100"),
+        high=Decimal("100.5"),
+        low=Decimal("99.5"),
+        close=Decimal("100"),
+        volume=Decimal("10"),
+        quote_volume=Decimal("1000"),
+        trade_count=5,
+        taker_buy_volume=Decimal("5"),
+        closed=True,
     )
     info = runner._check_exit(signal, candle)
     assert info is None
 
     # Expiry
     candle = Kline(
-        symbol="BTCUSDT", interval="1m",
+        symbol="BTCUSDT",
+        interval="1m",
         open_time=datetime(2024, 1, 1, 0, 31, tzinfo=timezone.utc),
-        open=Decimal("100"), high=Decimal("100.5"), low=Decimal("99.5"), close=Decimal("100"),
-        volume=Decimal("10"), quote_volume=Decimal("1000"), trade_count=5,
-        taker_buy_volume=Decimal("5"), closed=True,
+        open=Decimal("100"),
+        high=Decimal("100.5"),
+        low=Decimal("99.5"),
+        close=Decimal("100"),
+        volume=Decimal("10"),
+        quote_volume=Decimal("1000"),
+        trade_count=5,
+        taker_buy_volume=Decimal("5"),
+        closed=True,
     )
     info = runner._check_exit(signal, candle)
     assert info is not None
@@ -281,23 +311,25 @@ async def test_htf_candle_formation() -> None:
     start = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
     candles = []
     for i in range(60):
-        candles.append({
-            "symbol": symbol,
-            "open_time": start + timedelta(minutes=i),
-            "open": Decimal("100"),
-            "high": Decimal(str(101 + i % 5)),
-            "low": Decimal(str(99 - i % 3)),
-            "close": Decimal("100"),
-            "volume": Decimal("10"),
-            "quote_volume": Decimal("1000"),
-            "trade_count": 5,
-            "taker_buy_volume": Decimal("5"),
-            "closed": True,
-        })
+        candles.append(
+            {
+                "symbol": symbol,
+                "open_time": start + timedelta(minutes=i),
+                "open": Decimal("100"),
+                "high": Decimal(str(101 + i % 5)),
+                "low": Decimal(str(99 - i % 3)),
+                "close": Decimal("100"),
+                "volume": Decimal("10"),
+                "quote_volume": Decimal("1000"),
+                "trade_count": 5,
+                "taker_buy_volume": Decimal("5"),
+                "closed": True,
+            }
+        )
 
     runner = BacktestRunner(symbol, start, start + timedelta(hours=1), "1m")
     htf = runner._form_htf_from_1m(candles, "1h", 60)
     assert len(htf) == 1
     assert htf[0]["interval"] == "1h"
     assert htf[0]["high"] == Decimal("105")  # max of 101..105
-    assert htf[0]["low"] == Decimal("97")     # min of 99,98,97,99,98,97...
+    assert htf[0]["low"] == Decimal("97")  # min of 99,98,97,99,98,97...

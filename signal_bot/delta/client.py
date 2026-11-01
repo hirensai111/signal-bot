@@ -1,6 +1,5 @@
 """Async Delta Exchange India REST + WebSocket client with HMAC auth."""
 
-import __main__
 import argparse
 import asyncio
 import hashlib
@@ -9,7 +8,7 @@ import json
 import logging
 import time
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -104,7 +103,7 @@ class DeltaSymbolMap:
         delta_sym = self._binance_to_delta[binance_symbol]
         return self._products[delta_sym]
 
-    def resolve_by_product_id(self, product_id: int) -> Optional[str]:
+    def resolve_by_product_id(self, product_id: int) -> str | None:
         return self._product_id_to_binance.get(product_id)
 
 
@@ -112,14 +111,15 @@ class DeltaSymbolMap:
 # REST client
 # ---------------------------------------------------------------------------
 
+
 class DeltaClient:
     """Async REST client for Delta Exchange India."""
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        mode: Optional[str] = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        mode: str | None = None,
     ):
         self.api_key = (api_key or settings.delta_api_key or "").strip()
         self.api_secret = (api_secret or settings.delta_api_secret or "").strip()
@@ -129,8 +129,8 @@ class DeltaClient:
         self.rest_url = ENDPOINTS[self.mode]["rest"]
         self.ws_url = ENDPOINTS[self.mode]["ws"]
         self.symbol_map = DeltaSymbolMap(self)
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._products_cache: Optional[list[dict]] = None
+        self._session: aiohttp.ClientSession | None = None
+        self._products_cache: list[dict] | None = None
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -163,7 +163,13 @@ class DeltaClient:
         body: str = "",
     ) -> dict[str, str]:
         timestamp = str(int(time.time()))
-        message = method.upper() + timestamp + path + (("?" + query_string) if query_string else "") + body
+        message = (
+            method.upper()
+            + timestamp
+            + path
+            + (("?" + query_string) if query_string else "")
+            + body
+        )
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
             message.encode("utf-8"),
@@ -182,8 +188,8 @@ class DeltaClient:
         self,
         method: str,
         path: str,
-        params: Optional[dict] = None,
-        data: Optional[dict] = None,
+        params: dict | None = None,
+        data: dict | None = None,
     ) -> dict:
         if self._session is None:
             raise RuntimeError("DeltaClient not initialized. Call initialize() or use async with.")
@@ -263,8 +269,8 @@ class DeltaClient:
     # ------------------------------------------------------------------
     async def get_open_positions(
         self,
-        product_id: Optional[int] = None,
-        underlying_asset_symbol: Optional[str] = None,
+        product_id: int | None = None,
+        underlying_asset_symbol: str | None = None,
     ) -> dict:
         params = {}
         if product_id is not None:
@@ -279,9 +285,7 @@ class DeltaClient:
 
     async def set_margin_mode(self, product_id: int, mode: str) -> dict:
         """Delta India is isolated-margin-only; this is a no-op."""
-        logger.debug(
-            "margin mode is not configurable on Delta India, defaulting to isolated"
-        )
+        logger.debug("margin mode is not configurable on Delta India, defaulting to isolated")
         return {"success": True, "message": "margin mode is not configurable on Delta India"}
 
     # ------------------------------------------------------------------
@@ -299,7 +303,7 @@ class DeltaClient:
         take_profit_price: Decimal,
         client_order_id: str,
         order_type: str = "limit_ioc",
-        entry_price: Optional[Decimal] = None,
+        entry_price: Decimal | None = None,
     ) -> dict:
         """Place a bracket order with embedded SL/TP.
 
@@ -313,7 +317,7 @@ class DeltaClient:
         elif symbol in self.symbol_map._products:
             product_id = self.symbol_map._products[symbol]["id"]
         else:
-            for p in (self._products_cache or []):
+            for p in self._products_cache or []:
                 if p.get("symbol") == symbol:
                     product_id = p["id"]
                     break
@@ -338,8 +342,8 @@ class DeltaClient:
     async def cancel_order(
         self,
         order_id: str,
-        product_id: Optional[int] = None,
-        product_symbol: Optional[str] = None,
+        product_id: int | None = None,
+        product_symbol: str | None = None,
     ) -> dict:
         body: dict[str, Any] = {"id": int(order_id)}
         if product_symbol is not None:
@@ -348,7 +352,7 @@ class DeltaClient:
             body["product_id"] = product_id
         return await self._request("DELETE", "/v2/orders", data=body)
 
-    async def cancel_all_orders(self, product_id: Optional[int] = None) -> dict:
+    async def cancel_all_orders(self, product_id: int | None = None) -> dict:
         body: dict[str, Any] = {}
         if product_id is not None:
             body["product_id"] = product_id
@@ -427,6 +431,7 @@ class DeltaClient:
 # WebSocket client
 # ---------------------------------------------------------------------------
 
+
 class DeltaWebSocket:
     """Private WebSocket connection to Delta Exchange India.
 
@@ -442,7 +447,7 @@ class DeltaWebSocket:
         self.delta_events = delta_events
         self._ws_url = client.ws_url
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -540,6 +545,7 @@ class DeltaWebSocket:
 # CLI sanity check
 # ---------------------------------------------------------------------------
 
+
 async def _cli_check() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -551,7 +557,9 @@ async def _cli_check() -> None:
 
         # balance
         bal = await client.get_balance()
-        logger.info("Balance response keys: %s", list(bal.keys()) if isinstance(bal, dict) else "N/A")
+        logger.info(
+            "Balance response keys: %s", list(bal.keys()) if isinstance(bal, dict) else "N/A"
+        )
         balances = []
         if isinstance(bal, dict):
             balances = bal.get("balances") or bal.get("result") or []

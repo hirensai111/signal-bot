@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from signal_bot.config import settings
-from signal_bot.db.models import AggTrade as AggTradeModel, Candle1m, CandleFeature
+from signal_bot.db.models import AggTrade as AggTradeModel
+from signal_bot.db.models import Candle1m, CandleFeature
 from signal_bot.features.microstructure import MicrostructureEngine, get_recent_features
 from signal_bot.ingest.binance_ws import Kline
 
@@ -48,9 +49,7 @@ def _kline(
 
 @pytest.mark.asyncio
 async def test_cvd_and_volume_metrics() -> None:
-    engine = MicrostructureEngine(
-        asyncio.Queue(), session_factory=TestSessionLocal, settle_delay=0
-    )
+    engine = MicrostructureEngine(asyncio.Queue(), session_factory=TestSessionLocal, settle_delay=0)
     base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
     # Seed 19 historical candles with volume=10
@@ -131,9 +130,7 @@ async def test_cvd_and_volume_metrics() -> None:
 
 @pytest.mark.asyncio
 async def test_cvd_cumulative_across_candles() -> None:
-    engine = MicrostructureEngine(
-        asyncio.Queue(), session_factory=TestSessionLocal, settle_delay=0
-    )
+    engine = MicrostructureEngine(asyncio.Queue(), session_factory=TestSessionLocal, settle_delay=0)
     base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
     # Candle 1: net +5
@@ -194,12 +191,8 @@ async def test_cvd_cumulative_across_candles() -> None:
     await engine._process_candle(_kline(open_time=t2, volume=10.0))
 
     async with TestSessionLocal() as session:
-        f1 = await session.scalar(
-            select(CandleFeature).where(CandleFeature.open_time == base)
-        )
-        f2 = await session.scalar(
-            select(CandleFeature).where(CandleFeature.open_time == t2)
-        )
+        f1 = await session.scalar(select(CandleFeature).where(CandleFeature.open_time == base))
+        f2 = await session.scalar(select(CandleFeature).where(CandleFeature.open_time == t2))
 
     assert f1.cvd_cumulative == Decimal("5")
     assert f2.cvd_cumulative == Decimal("3")  # 5 + (-2)
@@ -207,9 +200,7 @@ async def test_cvd_cumulative_across_candles() -> None:
 
 @pytest.mark.asyncio
 async def test_get_recent_features_returns_dataframe() -> None:
-    engine = MicrostructureEngine(
-        asyncio.Queue(), session_factory=TestSessionLocal, settle_delay=0
-    )
+    engine = MicrostructureEngine(asyncio.Queue(), session_factory=TestSessionLocal, settle_delay=0)
     base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
     async with TestSessionLocal() as session:
@@ -236,9 +227,7 @@ async def test_get_recent_features_returns_dataframe() -> None:
             _kline(symbol="ETHUSDT", open_time=base + timedelta(minutes=i), volume=10.0)
         )
 
-    df = await get_recent_features(
-        "ETHUSDT", "1m", n=3, session_factory=TestSessionLocal
-    )
+    df = await get_recent_features("ETHUSDT", "1m", n=3, session_factory=TestSessionLocal)
 
     assert len(df) == 3
     assert list(df.columns) == [

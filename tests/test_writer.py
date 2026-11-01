@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from signal_bot.config import settings
-from signal_bot.db.models import AggTrade as AggTradeModel, Candle1m, Candle5m
+from signal_bot.db.models import AggTrade as AggTradeModel
+from signal_bot.db.models import Candle1m, Candle5m
 from signal_bot.ingest.binance_ws import AggTrade, Kline
 from signal_bot.storage.writer import QueueWriter
 
@@ -78,8 +79,12 @@ async def test_writer_persists_closed_candles_and_trades() -> None:
         batch_size=2,
     )
 
-    await queue.put(_kline(interval="1m", open_time=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)))
-    await queue.put(_kline(interval="5m", open_time=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)))
+    await queue.put(
+        _kline(interval="1m", open_time=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc))
+    )
+    await queue.put(
+        _kline(interval="5m", open_time=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc))
+    )
     await queue.put(_agg_trade())
 
     task = asyncio.create_task(writer.run())

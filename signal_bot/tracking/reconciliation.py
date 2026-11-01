@@ -8,7 +8,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 
@@ -37,7 +37,7 @@ class Reconciler:
         self.governor = governor
 
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._has_run_once = asyncio.Event()
 
     def start(self) -> None:
@@ -118,9 +118,7 @@ class Reconciler:
         async with self.session_factory() as session:
             # Load DB signals that we expect to be active
             result = await session.execute(
-                select(Signal).where(
-                    Signal.status.in_(["submitted", "triggered"])
-                )
+                select(Signal).where(Signal.status.in_(["submitted", "triggered"]))
             )
             db_signals = {s.id: s for s in result.scalars().all()}
 
@@ -138,19 +136,25 @@ class Reconciler:
                     db_by_symbol_triggered.setdefault(sig.symbol, []).append(sig)
 
             # Case 1: signal in DB but no matching Delta position/order
-            await self._check_missed_events(
-                session, db_signals, delta_positions, delta_orders
-            )
+            await self._check_missed_events(session, db_signals, delta_positions, delta_orders)
 
             # Case 2: Delta position with no linked signal
-            for product_id, pos in delta_positions.items():
+            for _product_id, pos in delta_positions.items():
                 delta_symbol = pos.get("product_symbol", "")
-                binance_symbol = self.delta_client.symbol_map.get_binance_symbol(delta_symbol) if hasattr(self.delta_client, 'symbol_map') else None
+                binance_symbol = (
+                    self.delta_client.symbol_map.get_binance_symbol(delta_symbol)
+                    if hasattr(self.delta_client, "symbol_map")
+                    else None
+                )
                 if not binance_symbol:
                     logger.warning("Cannot map delta symbol %s to binance", delta_symbol)
                     continue
 
-                matching = [s for s in db_signals.values() if s.symbol == binance_symbol and s.status == "triggered"]
+                matching = [
+                    s
+                    for s in db_signals.values()
+                    if s.symbol == binance_symbol and s.status == "triggered"
+                ]
                 if not matching:
                     await self._handle_orphan_position(session, pos)
 
@@ -237,9 +241,7 @@ class Reconciler:
             product_id,
         )
 
-        exit_price, exit_reason, _ = await self._reconstruct_exit_from_history(
-            signal, product_id
-        )
+        exit_price, exit_reason, _ = await self._reconstruct_exit_from_history(signal, product_id)
 
         hold_minutes = self._compute_hold_minutes(signal)
         pnl_pct, pnl_r = self._compute_pnl(signal, exit_price)
@@ -255,9 +257,12 @@ class Reconciler:
         )
         session.add(outcome)
 
-        db_status = {"sl_hit": "sl", "tp_hit": "tp", "manual_close": "closed_manual", "liquidation": "liquidated"}.get(
-            exit_reason, "closed_manual"
-        )
+        db_status = {
+            "sl_hit": "sl",
+            "tp_hit": "tp",
+            "manual_close": "closed_manual",
+            "liquidation": "liquidated",
+        }.get(exit_reason, "closed_manual")
         signal.status = db_status
         logger.info(
             "Reconstructed missed close for signal %s: %s @ %s (pnl_r=%s)",
@@ -370,9 +375,7 @@ class Reconciler:
     # ------------------------------------------------------------------
     # startup helpers
     # ------------------------------------------------------------------
-    async def _rebuild_open_positions(
-        self, session, delta_positions: dict[int, dict]
-    ) -> None:
+    async def _rebuild_open_positions(self, session, delta_positions: dict[int, dict]) -> None:
         state = await session.get(RiskState, 1)
         if state is None:
             state = RiskState(id=1)
@@ -384,7 +387,7 @@ class Reconciler:
             state.current_open_positions,
         )
 
-    def _resolve_product_id(self, delta_symbol: str) -> Optional[int]:
+    def _resolve_product_id(self, delta_symbol: str) -> int | None:
         """Resolve a Delta symbol to product_id via symbol_map."""
         try:
             return self.delta_client.symbol_map._products.get(delta_symbol, {}).get("id")
@@ -420,6 +423,7 @@ class Reconciler:
 # ---------------------------------------------------------------------------
 # parsing helpers
 # ---------------------------------------------------------------------------
+
 
 def _parse_positions(resp: dict) -> dict[int, dict]:
     """Return {product_id: position_dict}."""

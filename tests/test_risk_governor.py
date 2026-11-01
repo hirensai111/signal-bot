@@ -3,9 +3,9 @@
 import os
 import tempfile
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from signal_bot.db.models import Base, RiskState, Signal
 from signal_bot.risk.governor import RiskGovernor
-
 
 # Shared temp-file SQLite engine so multiple sessions see the same data.
 _fd, _DB_PATH = tempfile.mkstemp(suffix=".db")
@@ -71,6 +70,7 @@ async def governor() -> AsyncGenerator[RiskGovernor, None]:
 # helpers
 # ---------------------------------------------------------------------------
 
+
 async def _seed_risk_state(session: AsyncSession, **kwargs) -> RiskState:
     existing = await session.get(RiskState, 1)
     if existing:
@@ -105,6 +105,7 @@ async def _seed_signal(session: AsyncSession, status: str = "triggered") -> Sign
 # ---------------------------------------------------------------------------
 # 1. pre-trade checks — each limit breached individually
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_kill_switch_blocks(governor: RiskGovernor, db_session: AsyncSession):
@@ -173,6 +174,7 @@ async def test_all_clear_allows(governor: RiskGovernor, db_session: AsyncSession
 # 2. outcome sequences
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_win_resets_consecutive_losses(governor: RiskGovernor, db_session: AsyncSession):
     await _seed_risk_state(db_session, consecutive_losses=3, daily_trade_count=2)
@@ -196,7 +198,9 @@ async def test_loss_increments_streak(governor: RiskGovernor, db_session: AsyncS
 
 
 @pytest.mark.asyncio
-async def test_consecutive_losses_auto_trip_kill_switch(governor: RiskGovernor, db_session: AsyncSession):
+async def test_consecutive_losses_auto_trip_kill_switch(
+    governor: RiskGovernor, db_session: AsyncSession
+):
     await _seed_risk_state(db_session, consecutive_losses=4, daily_trade_count=4)
     sid = uuid.uuid4()
     await governor.record_outcome(sid, Decimal("-1.0"), won=False)
@@ -208,6 +212,7 @@ async def test_consecutive_losses_auto_trip_kill_switch(governor: RiskGovernor, 
 # ---------------------------------------------------------------------------
 # 3. daily reset
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_daily_reset_zeros_counters(governor: RiskGovernor, db_session: AsyncSession):
@@ -245,6 +250,7 @@ async def test_daily_reset_preserves_kill_switch(governor: RiskGovernor, db_sess
 # 4. management API
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_set_and_clear_kill_switch(governor: RiskGovernor, db_session: AsyncSession):
     await _seed_risk_state(db_session)
@@ -279,6 +285,7 @@ async def test_get_status(governor: RiskGovernor, db_session: AsyncSession):
 # ---------------------------------------------------------------------------
 # 5. alert rate limiting
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_alert_rate_limit(governor: RiskGovernor, db_session: AsyncSession):

@@ -4,12 +4,11 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from telegram.helpers import escape_markdown
 
-from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal
 from signal_bot.db.models import Signal, SignalOutcome
 
@@ -59,10 +58,8 @@ class OutcomeMonitor:
 
         while not self._shutdown.is_set():
             try:
-                event = await asyncio.wait_for(
-                    self.delta_events.get(), timeout=1.0
-                )
-            except asyncio.TimeoutError:
+                event = await asyncio.wait_for(self.delta_events.get(), timeout=1.0)
+            except TimeoutError:
                 continue
 
             try:
@@ -116,15 +113,11 @@ class OutcomeMonitor:
     # ------------------------------------------------------------------
     # position close processing
     # ------------------------------------------------------------------
-    async def _process_position_close(
-        self, product_id: int, position_data: dict[str, Any]
-    ) -> None:
+    async def _process_position_close(self, product_id: int, position_data: dict[str, Any]) -> None:
         async with self.session_factory() as session:
             signal = await self._resolve_signal(session, product_id, position_data)
             if signal is None:
-                logger.critical(
-                    "Orphan close: no matching signal for product_id=%s", product_id
-                )
+                logger.critical("Orphan close: no matching signal for product_id=%s", product_id)
                 return
 
             exit_price, exit_reason, exit_fees = await self._determine_exit(
@@ -167,22 +160,18 @@ class OutcomeMonitor:
         # Update governor
         if self.governor:
             try:
-                await self.governor.record_outcome(
-                    signal.id, pnl_r, won=pnl_r > 0
-                )
+                await self.governor.record_outcome(signal.id, pnl_r, won=pnl_r > 0)
             except Exception:
                 logger.exception("Governor record_outcome failed for signal %s", signal.id)
 
     async def _resolve_signal(
         self, session, product_id: int, position_data: dict[str, Any]
-    ) -> Optional[Signal]:
+    ) -> Signal | None:
         """Look up signal by client_order_id, delta_order_id, or symbol+status."""
         # 1. Try client_order_id from our in-memory map
         coid = self._product_signal_map.pop(product_id, None)
         if coid:
-            result = await session.execute(
-                select(Signal).where(Signal.client_order_id == coid)
-            )
+            result = await session.execute(select(Signal).where(Signal.client_order_id == coid))
             sig = result.scalar_one_or_none()
             if sig:
                 return sig
@@ -254,7 +243,7 @@ class OutcomeMonitor:
 
     async def _query_order_history(
         self, signal: Signal, product_id: int
-    ) -> tuple[Optional[Decimal], Optional[str], Decimal]:
+    ) -> tuple[Decimal | None, str | None, Decimal]:
         """Query Delta order history to find SL/TP fill."""
         end = datetime.now(timezone.utc)
         start = end - timedelta(hours=ORDER_HISTORY_WINDOW_HOURS)
@@ -336,19 +325,15 @@ class OutcomeMonitor:
             wait_seconds = (next_midnight - now).total_seconds()
 
             try:
-                await asyncio.wait_for(
-                    self._shutdown.wait(), timeout=wait_seconds
-                )
+                await asyncio.wait_for(self._shutdown.wait(), timeout=wait_seconds)
                 return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
             await self._post_daily_summary()
 
     async def _post_daily_summary(self) -> None:
-        today = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         yesterday = today - timedelta(days=1)
 
         async with self.session_factory() as session:
@@ -370,15 +355,9 @@ class OutcomeMonitor:
             win_rate = wins / total * 100
             avg_r = sum(float(o.pnl_r) for o in outcomes) / total
 
-            gross_profit = sum(
-                float(o.pnl_r) for o in outcomes if o.pnl_r > 0
-            )
-            gross_loss = abs(
-                sum(float(o.pnl_r) for o in outcomes if o.pnl_r < 0)
-            )
-            profit_factor = (
-                gross_profit / gross_loss if gross_loss > 0 else float("inf")
-            )
+            gross_profit = sum(float(o.pnl_r) for o in outcomes if o.pnl_r > 0)
+            gross_loss = abs(sum(float(o.pnl_r) for o in outcomes if o.pnl_r < 0))
+            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
             equity = [0.0]
             for o in outcomes:

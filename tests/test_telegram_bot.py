@@ -2,10 +2,9 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from signal_bot.config import settings
@@ -56,8 +55,12 @@ def _outcome(**kwargs) -> SignalOutcome:
 
 @pytest.mark.asyncio
 async def test_format_signal_long() -> None:
-    notifier = TelegramNotifier(bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123")
-    signal = _signal(side="long", entry=Decimal("100"), stop_loss=Decimal("99"), take_profit=Decimal("102"))
+    notifier = TelegramNotifier(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123"
+    )
+    signal = _signal(
+        side="long", entry=Decimal("100"), stop_loss=Decimal("99"), take_profit=Decimal("102")
+    )
     text = notifier._format_signal(signal)
 
     assert "LONG" in text
@@ -72,8 +75,12 @@ async def test_format_signal_long() -> None:
 
 @pytest.mark.asyncio
 async def test_format_signal_short() -> None:
-    notifier = TelegramNotifier(bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123")
-    signal = _signal(side="short", entry=Decimal("100"), stop_loss=Decimal("101"), take_profit=Decimal("98"))
+    notifier = TelegramNotifier(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123"
+    )
+    signal = _signal(
+        side="short", entry=Decimal("100"), stop_loss=Decimal("101"), take_profit=Decimal("98")
+    )
     text = notifier._format_signal(signal)
 
     assert "🔴" in text
@@ -82,9 +89,13 @@ async def test_format_signal_short() -> None:
 
 @pytest.mark.asyncio
 async def test_format_outcome_tp() -> None:
-    notifier = TelegramNotifier(bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123")
+    notifier = TelegramNotifier(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123"
+    )
     signal = _signal()
-    outcome = _outcome(exit_reason="tp", pnl_pct=Decimal("2.03"), pnl_r=Decimal("2.0"), hold_minutes=47)
+    outcome = _outcome(
+        exit_reason="tp", pnl_pct=Decimal("2.03"), pnl_r=Decimal("2.0"), hold_minutes=47
+    )
     text = notifier._format_outcome(signal, outcome)
 
     assert "✅" in text
@@ -97,9 +108,13 @@ async def test_format_outcome_tp() -> None:
 
 @pytest.mark.asyncio
 async def test_format_outcome_sl() -> None:
-    notifier = TelegramNotifier(bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123")
+    notifier = TelegramNotifier(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123"
+    )
     signal = _signal()
-    outcome = _outcome(exit_reason="sl", pnl_pct=Decimal("-1.02"), pnl_r=Decimal("-1.0"), hold_minutes=12)
+    outcome = _outcome(
+        exit_reason="sl", pnl_pct=Decimal("-1.02"), pnl_r=Decimal("-1.0"), hold_minutes=12
+    )
     text = notifier._format_outcome(signal, outcome)
 
     assert "❌" in text
@@ -111,32 +126,34 @@ async def test_format_outcome_sl() -> None:
 
 @pytest.mark.asyncio
 async def test_notify_signal_swallows_exception() -> None:
-    notifier = TelegramNotifier(bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123")
+    notifier = TelegramNotifier(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123"
+    )
     signal = _signal()
 
     notifier.application.bot = AsyncMock()
-    notifier.application.bot.send_message = AsyncMock(
-        side_effect=Exception("network down")
-    )
+    notifier.application.bot.send_message = AsyncMock(side_effect=Exception("network down"))
     await notifier.notify_signal(signal)  # must not raise
 
 
 @pytest.mark.asyncio
 async def test_notify_outcome_swallows_exception() -> None:
-    notifier = TelegramNotifier(bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123")
+    notifier = TelegramNotifier(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123"
+    )
     signal = _signal()
     outcome = _outcome()
 
     notifier.application.bot = AsyncMock()
-    notifier.application.bot.send_message = AsyncMock(
-        side_effect=Exception("network down")
-    )
+    notifier.application.bot.send_message = AsyncMock(side_effect=Exception("network down"))
     await notifier.notify_outcome(signal, outcome)  # must not raise
 
 
 @pytest.mark.asyncio
 async def test_cmd_status_with_data() -> None:
-    notifier = TelegramNotifier(bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123")
+    notifier = TelegramNotifier(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123"
+    )
 
     async with TestSessionLocal() as session:
         # Open signal
@@ -178,7 +195,9 @@ async def test_cmd_status_with_data() -> None:
 
 @pytest.mark.asyncio
 async def test_cmd_status_empty() -> None:
-    notifier = TelegramNotifier(bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123")
+    notifier = TelegramNotifier(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="123"
+    )
 
     update = MagicMock()
     update.message.reply_text = AsyncMock()

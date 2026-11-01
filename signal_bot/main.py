@@ -3,16 +3,14 @@
 import asyncio
 import logging
 import signal
-import sys
-from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
 from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal, async_engine
 from signal_bot.db.models import Base, Instrument, Signal
-from signal_bot.delta.client import DeltaClient, DeltaWebSocket
 from signal_bot.delivery.telegram_bot import TelegramNotifier
+from signal_bot.delta.client import DeltaClient, DeltaWebSocket
 from signal_bot.execution.engine import EXEC_MODE, ExecutionEngine
 from signal_bot.execution.governor import BaseGovernor
 from signal_bot.features.htf_levels import HtfLevelScanner
@@ -32,14 +30,54 @@ logger = logging.getLogger(__name__)
 
 # Known instrument defaults keyed by symbol.
 _INSTRUMENT_DEFAULTS = {
-    "BTCUSDT": {"base_asset": "BTC", "quote_asset": "USDT", "tick_size": "0.10", "min_qty": "0.001"},
-    "ETHUSDT": {"base_asset": "ETH", "quote_asset": "USDT", "tick_size": "0.01", "min_qty": "0.001"},
-    "SOLUSDT": {"base_asset": "SOL", "quote_asset": "USDT", "tick_size": "0.001", "min_qty": "0.01"},
-    "LINKUSDT": {"base_asset": "LINK", "quote_asset": "USDT", "tick_size": "0.001", "min_qty": "0.01"},
-    "AVAXUSDT": {"base_asset": "AVAX", "quote_asset": "USDT", "tick_size": "0.001", "min_qty": "0.01"},
-    "ADAUSDT": {"base_asset": "ADA", "quote_asset": "USDT", "tick_size": "0.0001", "min_qty": "1.0"},
-    "XRPUSDT": {"base_asset": "XRP", "quote_asset": "USDT", "tick_size": "0.0001", "min_qty": "1.0"},
-    "BNBUSDT": {"base_asset": "BNB", "quote_asset": "USDT", "tick_size": "0.01", "min_qty": "0.001"},
+    "BTCUSDT": {
+        "base_asset": "BTC",
+        "quote_asset": "USDT",
+        "tick_size": "0.10",
+        "min_qty": "0.001",
+    },
+    "ETHUSDT": {
+        "base_asset": "ETH",
+        "quote_asset": "USDT",
+        "tick_size": "0.01",
+        "min_qty": "0.001",
+    },
+    "SOLUSDT": {
+        "base_asset": "SOL",
+        "quote_asset": "USDT",
+        "tick_size": "0.001",
+        "min_qty": "0.01",
+    },
+    "LINKUSDT": {
+        "base_asset": "LINK",
+        "quote_asset": "USDT",
+        "tick_size": "0.001",
+        "min_qty": "0.01",
+    },
+    "AVAXUSDT": {
+        "base_asset": "AVAX",
+        "quote_asset": "USDT",
+        "tick_size": "0.001",
+        "min_qty": "0.01",
+    },
+    "ADAUSDT": {
+        "base_asset": "ADA",
+        "quote_asset": "USDT",
+        "tick_size": "0.0001",
+        "min_qty": "1.0",
+    },
+    "XRPUSDT": {
+        "base_asset": "XRP",
+        "quote_asset": "USDT",
+        "tick_size": "0.0001",
+        "min_qty": "1.0",
+    },
+    "BNBUSDT": {
+        "base_asset": "BNB",
+        "quote_asset": "USDT",
+        "tick_size": "0.01",
+        "min_qty": "0.001",
+    },
 }
 
 
@@ -62,12 +100,15 @@ async def seed_instruments() -> None:
                 logger.info("Instrument %s already present — skipping.", symbol)
                 continue
 
-            defaults = _INSTRUMENT_DEFAULTS.get(symbol, {
-                "base_asset": symbol.replace("USDT", ""),
-                "quote_asset": "USDT",
-                "tick_size": "0.01",
-                "min_qty": "0.001",
-            })
+            defaults = _INSTRUMENT_DEFAULTS.get(
+                symbol,
+                {
+                    "base_asset": symbol.replace("USDT", ""),
+                    "quote_asset": "USDT",
+                    "tick_size": "0.01",
+                    "min_qty": "0.001",
+                },
+            )
             instrument = Instrument(
                 symbol=symbol,
                 base_asset=defaults["base_asset"],
@@ -87,6 +128,7 @@ async def seed_instruments() -> None:
 # Pipeline helpers
 # ---------------------------------------------------------------------------
 
+
 async def _signal_pipeline(
     detector: SweepDetector,
     sizer: RiskSizer,
@@ -100,7 +142,7 @@ async def _signal_pipeline(
     while not shutdown_event.is_set():
         try:
             candle = await asyncio.wait_for(candle_queue.get(), timeout=1.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             continue
 
         if candle.interval not in ("1m", "5m"):
@@ -193,6 +235,7 @@ async def _stats_logger(
 # ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
+
 
 async def main() -> None:
     logger.info(
@@ -313,8 +356,12 @@ async def main() -> None:
             asyncio.create_task(micro_engine.run(), name="micro_engine"),
             asyncio.create_task(
                 _signal_pipeline(
-                    sweep_detector, risk_sizer, signal_queue,
-                    sweep_candle_queue, shutdown_event, signals_fired,
+                    sweep_detector,
+                    risk_sizer,
+                    signal_queue,
+                    sweep_candle_queue,
+                    shutdown_event,
+                    signals_fired,
                 ),
                 name="signal_pipeline",
             ),

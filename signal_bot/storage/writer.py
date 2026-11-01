@@ -2,13 +2,12 @@
 
 import asyncio
 import logging
-from datetime import datetime
-from typing import Optional
 
 from sqlalchemy.dialects.postgresql import insert
 
 from signal_bot.db.connection import AsyncSessionLocal
-from signal_bot.db.models import AggTrade as AggTradeModel, Candle1m, Candle5m
+from signal_bot.db.models import AggTrade as AggTradeModel
+from signal_bot.db.models import Candle1m, Candle5m
 from signal_bot.ingest.binance_ws import AggTrade, Kline
 
 logger = logging.getLogger(__name__)
@@ -51,10 +50,8 @@ class QueueWriter:
         async with self.session_factory() as session:
             while not self._shutdown.is_set():
                 try:
-                    item = await asyncio.wait_for(
-                        self.source_queue.get(), timeout=0.1
-                    )
-                except asyncio.TimeoutError:
+                    item = await asyncio.wait_for(self.source_queue.get(), timeout=0.1)
+                except TimeoutError:
                     await self._flush_if_needed(session)
                     continue
 
@@ -80,9 +77,7 @@ class QueueWriter:
 
     async def _flush_if_needed(self, session) -> None:
         now = asyncio.get_event_loop().time()
-        size_reached = any(
-            len(batch) >= self.batch_size for batch in self._batches.values()
-        )
+        size_reached = any(len(batch) >= self.batch_size for batch in self._batches.values())
         if size_reached or (now - self._last_flush >= self.flush_interval):
             await self._flush(session)
             self._last_flush = now
@@ -96,25 +91,19 @@ class QueueWriter:
                 stmt = (
                     insert(Candle1m)
                     .values(batch)
-                    .on_conflict_do_nothing(
-                        index_elements=["symbol", "open_time"]
-                    )
+                    .on_conflict_do_nothing(index_elements=["symbol", "open_time"])
                 )
             elif table_name == "candles_5m":
                 stmt = (
                     insert(Candle5m)
                     .values(batch)
-                    .on_conflict_do_nothing(
-                        index_elements=["symbol", "open_time"]
-                    )
+                    .on_conflict_do_nothing(index_elements=["symbol", "open_time"])
                 )
             elif table_name == "agg_trades":
                 stmt = (
                     insert(AggTradeModel)
                     .values(batch)
-                    .on_conflict_do_nothing(
-                        index_elements=["symbol", "trade_id"]
-                    )
+                    .on_conflict_do_nothing(index_elements=["symbol", "trade_id"])
                 )
             else:
                 continue

@@ -1,13 +1,12 @@
 """SQLAlchemy 2.0 declarative models for the signal bot schema."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from datetime import date
-
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     Date,
@@ -19,7 +18,6 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy import JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -88,24 +86,20 @@ class AggTrade(Base):
 class HtfLevel(Base):
     __tablename__ = "htf_levels"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        primary_key=True, default=uuid.uuid4, sort_order=-1
-    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4, sort_order=-1)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     timeframe: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
     level_type: Mapped[str] = mapped_column(String(20), nullable=False)
     price: Mapped[Decimal] = mapped_column(Numeric(32, 16), nullable=False)
     formed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    broken_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    broken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class Signal(Base):
     __tablename__ = "signals"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        primary_key=True, default=uuid.uuid4, sort_order=-1
-    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4, sort_order=-1)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     side: Mapped[str] = mapped_column(String(10), nullable=False)
     entry: Mapped[Decimal] = mapped_column(Numeric(32, 16), nullable=False)
@@ -115,22 +109,22 @@ class Signal(Base):
     risk_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     account_size_assumed: Mapped[Decimal] = mapped_column(Numeric(32, 8), nullable=False)
     est_hold_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
-    pattern_features: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    pattern_features: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, nullable=False
     )
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
 
     # Delta execution fields
-    client_order_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    delta_order_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    delta_symbol: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    delta_entry_intended: Mapped[Optional[Decimal]] = mapped_column(Numeric(32, 16), nullable=True)
-    delta_entry_actual: Mapped[Optional[Decimal]] = mapped_column(Numeric(32, 16), nullable=True)
-    delta_basis: Mapped[Optional[Decimal]] = mapped_column(Numeric(16, 8), nullable=True)
-    entry_fees_usdt: Mapped[Optional[Decimal]] = mapped_column(Numeric(16, 8), nullable=True)
-    slippage_bps: Mapped[Optional[Decimal]] = mapped_column(Numeric(16, 8), nullable=True)
-    cancelled_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    client_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    delta_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    delta_symbol: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    delta_entry_intended: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
+    delta_entry_actual: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
+    delta_basis: Mapped[Decimal | None] = mapped_column(Numeric(16, 8), nullable=True)
+    entry_fees_usdt: Mapped[Decimal | None] = mapped_column(Numeric(16, 8), nullable=True)
+    slippage_bps: Mapped[Decimal | None] = mapped_column(Numeric(16, 8), nullable=True)
+    cancelled_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     outcome: Mapped[Optional["SignalOutcome"]] = relationship(
         "SignalOutcome", back_populates="signal", uselist=False
@@ -142,26 +136,18 @@ class RiskState(Base):
     __table_args__ = (CheckConstraint("id = 1", name="check_single_row"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    kill_switch_active: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
-    kill_switch_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    kill_switch_set_at: Mapped[Optional[datetime]] = mapped_column(
+    kill_switch_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    kill_switch_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kill_switch_set_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     daily_pnl_r: Mapped[Decimal] = mapped_column(
         Numeric(16, 8), default=Decimal("0"), nullable=False
     )
-    daily_trade_count: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False
-    )
-    consecutive_losses: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False
-    )
-    last_reset_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    current_open_positions: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False
-    )
+    daily_trade_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    consecutive_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_reset_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    current_open_positions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class SignalOutcome(Base):

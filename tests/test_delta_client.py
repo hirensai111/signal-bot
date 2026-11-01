@@ -4,20 +4,19 @@ import asyncio
 import hashlib
 import hmac
 import json
+from collections.abc import AsyncGenerator
 from decimal import Decimal
-from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
 import pytest_asyncio
 
-from delta.client import (
+from signal_bot.delta.client import (
     ENDPOINTS,
-    DeltaClient,
-    DeltaSymbolMap,
-    DeltaWebSocket,
     WS_AUTH_PATH,
+    DeltaClient,
+    DeltaWebSocket,
 )
 
 
@@ -30,6 +29,7 @@ async def setup_test_db() -> AsyncGenerator[None, None]:
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_products_response():
     return {
@@ -53,8 +53,9 @@ def client():
 # mode / endpoint selection
 # ---------------------------------------------------------------------------
 
+
 def test_default_mode_is_testnet():
-    with patch("delta.client.settings.delta_mode", "testnet"):
+    with patch("signal_bot.delta.client.settings.delta_mode", "testnet"):
         c = DeltaClient(api_key="k", api_secret="s")
         assert c.mode == "testnet"
         assert c.rest_url == ENDPOINTS["testnet"]["rest"]
@@ -77,9 +78,10 @@ def test_invalid_mode_raises():
 # HMAC signature
 # ---------------------------------------------------------------------------
 
+
 def test_hmac_signature_known_vector(client: DeltaClient):
     """Verify the exact signing message format for a frozen timestamp."""
-    with patch("delta.client.time.time", return_value=1609459200.0):
+    with patch("signal_bot.delta.client.time.time", return_value=1609459200.0):
         headers = client._sign_request("GET", "/v2/products", "", "")
 
     expected_message = "GET1609459200/v2/products"
@@ -95,7 +97,7 @@ def test_hmac_signature_known_vector(client: DeltaClient):
 
 
 def test_hmac_signature_with_query_string(client: DeltaClient):
-    with patch("delta.client.time.time", return_value=1609459200.0):
+    with patch("signal_bot.delta.client.time.time", return_value=1609459200.0):
         headers = client._sign_request("GET", "/v2/orders", "product_id=27&state=open", "")
 
     expected_message = "GET1609459200/v2/orders?product_id=27&state=open"
@@ -108,7 +110,7 @@ def test_hmac_signature_with_query_string(client: DeltaClient):
 
 
 def test_hmac_signature_with_body(client: DeltaClient):
-    with patch("delta.client.time.time", return_value=1609459200.0):
+    with patch("signal_bot.delta.client.time.time", return_value=1609459200.0):
         body = '{"product_id":27,"size":10}'
         headers = client._sign_request("POST", "/v2/orders", "", body)
 
@@ -125,10 +127,13 @@ def test_hmac_signature_with_body(client: DeltaClient):
 # REST methods (mocked _request)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_products(client: DeltaClient):
     client._session = MagicMock()
-    with patch.object(client, "_request", new_callable=AsyncMock, return_value={"products": [1, 2]}):
+    with patch.object(
+        client, "_request", new_callable=AsyncMock, return_value={"products": [1, 2]}
+    ):
         resp = await client.get_products()
     assert resp == {"products": [1, 2]}
 
@@ -144,9 +149,7 @@ async def test_get_balance(client: DeltaClient):
 @pytest.mark.asyncio
 async def test_get_open_positions(client: DeltaClient):
     client._session = MagicMock()
-    with patch.object(
-        client, "_request", new_callable=AsyncMock, return_value={"positions": []}
-    ):
+    with patch.object(client, "_request", new_callable=AsyncMock, return_value={"positions": []}):
         resp = await client.get_open_positions()
     assert resp == {"positions": []}
 
@@ -175,7 +178,9 @@ async def test_cancel_order(client: DeltaClient):
     client._session = MagicMock()
     with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
         await client.cancel_order("12345", product_symbol="BTCUSD")
-    mock_req.assert_awaited_once_with("DELETE", "/v2/orders", data={"id": 12345, "product_symbol": "BTCUSD"})
+    mock_req.assert_awaited_once_with(
+        "DELETE", "/v2/orders", data={"id": 12345, "product_symbol": "BTCUSD"}
+    )
 
 
 @pytest.mark.asyncio
@@ -222,6 +227,7 @@ async def test_get_order_history(client: DeltaClient):
 # Bracket order payload
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_place_bracket_order_payload(client: DeltaClient):
     client._session = MagicMock()
@@ -258,6 +264,7 @@ async def test_place_bracket_order_payload(client: DeltaClient):
 # ---------------------------------------------------------------------------
 # Symbol map
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_symbol_map_loads_and_translates():
@@ -298,6 +305,7 @@ async def test_symbol_map_hard_fails_on_missing_symbol():
 # WebSocket auth + reconnect
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_ws_authenticate_message():
     """Verify the WS auth message uses the correct signing path."""
@@ -309,7 +317,7 @@ async def test_ws_authenticate_message():
 
     ws_client = DeltaWebSocket(client, asyncio.Queue())
 
-    with patch("delta.client.time.time", return_value=1609459200.0):
+    with patch("signal_bot.delta.client.time.time", return_value=1609459200.0):
         await ws_client._authenticate(ws_mock)
 
     ws_mock.send_json.assert_awaited_once()
@@ -377,7 +385,7 @@ async def test_ws_reconnect_on_error():
     async def fast_sleep(_duration: float) -> None:
         await real_sleep(0)
 
-    with patch("delta.client.asyncio.sleep", fast_sleep):
+    with patch("signal_bot.delta.client.asyncio.sleep", fast_sleep):
         task = asyncio.create_task(ws_client._run())
         # Yield to let the task body execute at least one iteration.
         await real_sleep(0.01)

@@ -1,6 +1,5 @@
 """Tests for risk sizing and signal persistence."""
 
-import asyncio
 from decimal import Decimal
 
 import pytest
@@ -166,9 +165,7 @@ async def test_signal_persisted_to_db() -> None:
     assert signal is not None
 
     async with TestSessionLocal() as session:
-        row = await session.scalar(
-            select(Signal).where(Signal.id == signal.id)
-        )
+        row = await session.scalar(select(Signal).where(Signal.id == signal.id))
         assert row is not None
         assert row.status == "pending"
         assert row.side == "long"

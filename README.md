@@ -53,12 +53,14 @@ python -m signal_bot.delta.client --check
 import asyncio
 from signal_bot.delta.client import DeltaClient
 
+
 async def main():
     async with DeltaClient() as client:
         await client.symbol_map.load()
         balance = await client.get_balance()
         positions = await client.get_open_positions()
         print(balance, positions)
+
 
 asyncio.run(main())
 ```

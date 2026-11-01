@@ -2,9 +2,8 @@
 
 import asyncio
 import uuid
-from datetime import datetime
+from collections.abc import AsyncGenerator
 from decimal import Decimal
-from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,6 +23,7 @@ async def setup_test_db() -> AsyncGenerator[None, None]:
 # ---------------------------------------------------------------------------
 # mocks
 # ---------------------------------------------------------------------------
+
 
 class MockSession:
     def __init__(self, signals: dict):
@@ -115,6 +115,7 @@ def _make_delta_client(basis_shift: Decimal = Decimal("0")):
 # ---------------------------------------------------------------------------
 # 1. bracket params & price translation
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_bracket_params_computed_correctly():
@@ -213,6 +214,7 @@ async def test_bracket_params_for_short():
 # 2. idempotency
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_idempotency_skips_submitted():
     signals = {}
@@ -261,6 +263,7 @@ async def test_idempotency_skips_triggered():
 # 3. cross-venue basis abort
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_basis_too_wide_aborts():
     """Delta mid is >0.15% away from Binance entry → cancel."""
@@ -290,6 +293,7 @@ async def test_basis_too_wide_aborts():
 # ---------------------------------------------------------------------------
 # 4. size below minimum
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_size_below_min_aborts():
@@ -328,6 +332,7 @@ async def test_size_below_min_aborts():
 # 5. governor denial
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_governor_denial_cancels():
     signals = {}
@@ -357,6 +362,7 @@ async def test_governor_denial_cancels():
 # 6. no-fill timeout
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_no_fill_timeout_expires():
     signals = {}
@@ -385,6 +391,7 @@ async def test_no_fill_timeout_expires():
 # ---------------------------------------------------------------------------
 # 7. fill event resolves to triggered
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_fill_event_marks_triggered():
@@ -418,16 +425,18 @@ async def test_fill_event_marks_triggered():
     await asyncio.sleep(0.2)
 
     # Inject a fill event
-    await delta_events.put({
-        "channel": "private_orders",
-        "data": {
-            "client_order_id": f"sig_{signal.id}",
-            "state": "filled",
-            "average_fill_price": "65001.0",
-            "filled_size": "6500",
-            "commission": "5.2",
-        },
-    })
+    await delta_events.put(
+        {
+            "channel": "private_orders",
+            "data": {
+                "client_order_id": f"sig_{signal.id}",
+                "state": "filled",
+                "average_fill_price": "65001.0",
+                "filled_size": "6500",
+                "commission": "5.2",
+            },
+        }
+    )
 
     await asyncio.wait_for(task, timeout=3.0)
     await engine.stop()
@@ -443,6 +452,7 @@ async def test_fill_event_marks_triggered():
 # ---------------------------------------------------------------------------
 # 8. DRY_RUN short-circuit
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_dry_run_short_circuits_to_triggered():

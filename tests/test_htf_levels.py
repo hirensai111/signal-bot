@@ -51,9 +51,7 @@ def _kline(
 
 @pytest.mark.asyncio
 async def test_swing_high_detection() -> None:
-    scanner = HtfLevelScanner(
-        asyncio.Queue(), lookback=2, session_factory=TestSessionLocal
-    )
+    scanner = HtfLevelScanner(asyncio.Queue(), lookback=2, session_factory=TestSessionLocal)
     base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
     candles = [
@@ -77,9 +75,7 @@ async def test_swing_high_detection() -> None:
 
 @pytest.mark.asyncio
 async def test_swing_low_detection() -> None:
-    scanner = HtfLevelScanner(
-        asyncio.Queue(), lookback=2, session_factory=TestSessionLocal
-    )
+    scanner = HtfLevelScanner(asyncio.Queue(), lookback=2, session_factory=TestSessionLocal)
     base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
     candles = [
@@ -102,15 +98,17 @@ async def test_swing_low_detection() -> None:
 
 @pytest.mark.asyncio
 async def test_level_breaking() -> None:
-    scanner = HtfLevelScanner(
-        asyncio.Queue(), lookback=1, session_factory=TestSessionLocal
-    )
+    scanner = HtfLevelScanner(asyncio.Queue(), lookback=1, session_factory=TestSessionLocal)
     base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
     # Swing high at hour 1 (high=105)
     await scanner._process_candle(_kline(open_time=base, high=100, low=90, close_p=95))
-    await scanner._process_candle(_kline(open_time=base + timedelta(hours=1), high=105, low=95, close_p=100))
-    await scanner._process_candle(_kline(open_time=base + timedelta(hours=2), high=100, low=90, close_p=95))
+    await scanner._process_candle(
+        _kline(open_time=base + timedelta(hours=1), high=105, low=95, close_p=100)
+    )
+    await scanner._process_candle(
+        _kline(open_time=base + timedelta(hours=2), high=100, low=90, close_p=95)
+    )
 
     # Now close above the swing high -> break it
     await scanner._process_candle(
@@ -123,20 +121,24 @@ async def test_level_breaking() -> None:
         broken = [l for l in levels if not l.active]
         assert len(broken) == 1
         assert broken[0].level_type == "swing_high"
-        assert broken[0].broken_at.replace(tzinfo=None) == (base + timedelta(hours=3)).replace(tzinfo=None)
+        assert broken[0].broken_at.replace(tzinfo=None) == (base + timedelta(hours=3)).replace(
+            tzinfo=None
+        )
 
 
 @pytest.mark.asyncio
 async def test_swing_low_breaking() -> None:
-    scanner = HtfLevelScanner(
-        asyncio.Queue(), lookback=1, session_factory=TestSessionLocal
-    )
+    scanner = HtfLevelScanner(asyncio.Queue(), lookback=1, session_factory=TestSessionLocal)
     base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
     # Swing low at hour 1 (low=90)
     await scanner._process_candle(_kline(open_time=base, high=110, low=100, close_p=105))
-    await scanner._process_candle(_kline(open_time=base + timedelta(hours=1), high=105, low=90, close_p=100))
-    await scanner._process_candle(_kline(open_time=base + timedelta(hours=2), high=110, low=100, close_p=105))
+    await scanner._process_candle(
+        _kline(open_time=base + timedelta(hours=1), high=105, low=90, close_p=100)
+    )
+    await scanner._process_candle(
+        _kline(open_time=base + timedelta(hours=2), high=110, low=100, close_p=105)
+    )
 
     # Close below the swing low -> break it
     await scanner._process_candle(
@@ -149,14 +151,14 @@ async def test_swing_low_breaking() -> None:
         broken = [l for l in levels if not l.active]
         assert len(broken) == 1
         assert broken[0].level_type == "swing_low"
-        assert broken[0].broken_at.replace(tzinfo=None) == (base + timedelta(hours=3)).replace(tzinfo=None)
+        assert broken[0].broken_at.replace(tzinfo=None) == (base + timedelta(hours=3)).replace(
+            tzinfo=None
+        )
 
 
 @pytest.mark.asyncio
 async def test_prune_keeps_last_20_active() -> None:
-    scanner = HtfLevelScanner(
-        asyncio.Queue(), lookback=1, session_factory=TestSessionLocal
-    )
+    scanner = HtfLevelScanner(asyncio.Queue(), lookback=1, session_factory=TestSessionLocal)
     base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
     # Generate 25 swing highs with closes=0 so none are broken
@@ -173,8 +175,8 @@ async def test_prune_keeps_last_20_active() -> None:
 
     async with TestSessionLocal() as session:
         all_levels = (
-            await session.execute(select(HtfLevel).order_by(HtfLevel.formed_at))
-        ).scalars().all()
+            (await session.execute(select(HtfLevel).order_by(HtfLevel.formed_at))).scalars().all()
+        )
         active = [l for l in all_levels if l.active]
         assert len(active) == 20
         assert len(all_levels) == 25

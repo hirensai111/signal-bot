@@ -5,11 +5,9 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import select
 
-from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal
 from signal_bot.db.models import Candle1m, Candle5m, CandleFeature, HtfLevel
 from signal_bot.ingest.binance_ws import Kline
@@ -100,10 +98,8 @@ class SweepDetector:
         logger.info("Sweep detector started.")
         while not self._shutdown.is_set():
             try:
-                candle = await asyncio.wait_for(
-                    self.candle_queue.get(), timeout=1.0
-                )
-            except asyncio.TimeoutError:
+                candle = await asyncio.wait_for(self.candle_queue.get(), timeout=1.0)
+            except TimeoutError:
                 continue
 
             if candle.interval not in ("1m", "5m"):
@@ -113,7 +109,7 @@ class SweepDetector:
             if candidate:
                 logger.info("Signal candidate fired: %s", candidate)
 
-    async def _evaluate(self, candle: Kline) -> Optional[SignalCandidate]:
+    async def _evaluate(self, candle: Kline) -> SignalCandidate | None:
         table = Candle1m if candle.interval == "1m" else Candle5m
 
         async with self.session_factory() as session:
@@ -159,15 +155,11 @@ class SweepDetector:
             return None
 
         # Evaluate long first, then short
-        candidate = await self._evaluate_long(
-            candle, prior3, swing_lows, swing_highs, table
-        )
+        candidate = await self._evaluate_long(candle, prior3, swing_lows, swing_highs, table)
         if candidate:
             return candidate
 
-        candidate = await self._evaluate_short(
-            candle, prior3, swing_highs, swing_lows, table
-        )
+        candidate = await self._evaluate_short(candle, prior3, swing_highs, swing_lows, table)
         return candidate
 
     async def _evaluate_long(
@@ -177,13 +169,11 @@ class SweepDetector:
         swing_lows: list[HtfLevel],
         swing_highs: list[HtfLevel],
         table,
-    ) -> Optional[SignalCandidate]:
+    ) -> SignalCandidate | None:
         if not swing_lows:
             return None
 
-        if self._is_in_cooldown(
-            candle.symbol, "long", candle.open_time, swing_lows + swing_highs
-        ):
+        if self._is_in_cooldown(candle.symbol, "long", candle.open_time, swing_lows + swing_highs):
             return None
 
         # 1. Find sweep candle (most recent of the 3 that pierced a level)
@@ -215,10 +205,9 @@ class SweepDetector:
                     )
                 )
             if sweep_feature:
-                volume_ok = (
-                    sweep_feature.vol_zscore >= Decimal("2.0")
-                    or sweep_feature.vol_ratio_20 >= Decimal("2.5")
-                )
+                volume_ok = sweep_feature.vol_zscore >= Decimal(
+                    "2.0"
+                ) or sweep_feature.vol_ratio_20 >= Decimal("2.5")
 
         # 4. CVD divergence
         divergence_ok = False
@@ -321,13 +310,11 @@ class SweepDetector:
         swing_highs: list[HtfLevel],
         swing_lows: list[HtfLevel],
         table,
-    ) -> Optional[SignalCandidate]:
+    ) -> SignalCandidate | None:
         if not swing_highs:
             return None
 
-        if self._is_in_cooldown(
-            candle.symbol, "short", candle.open_time, swing_lows + swing_highs
-        ):
+        if self._is_in_cooldown(candle.symbol, "short", candle.open_time, swing_lows + swing_highs):
             return None
 
         sweep_candle = None
@@ -355,10 +342,9 @@ class SweepDetector:
                     )
                 )
             if sweep_feature:
-                volume_ok = (
-                    sweep_feature.vol_zscore >= Decimal("2.0")
-                    or sweep_feature.vol_ratio_20 >= Decimal("2.5")
-                )
+                volume_ok = sweep_feature.vol_zscore >= Decimal(
+                    "2.0"
+                ) or sweep_feature.vol_ratio_20 >= Decimal("2.5")
 
         divergence_ok = False
         prior_high_feature = None

@@ -3,7 +3,6 @@
 import argparse
 import asyncio
 import logging
-import os
 import random
 import statistics
 from collections import defaultdict
@@ -13,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from signal_bot.config import settings
@@ -22,10 +20,7 @@ from signal_bot.db.models import (
     Base,
     Candle1m,
     Candle5m,
-    CandleFeature,
-    HtfLevel,
     Signal,
-    SignalOutcome,
 )
 from signal_bot.features.htf_levels import HtfLevelScanner
 from signal_bot.features.microstructure import MicrostructureEngine
@@ -36,14 +31,14 @@ from signal_bot.signals.sweep_detector import SweepDetector
 logger = logging.getLogger(__name__)
 
 # Delta India cost model
-ENTRY_FEE = Decimal("0.0005")          # taker fee on limit-IOC entry
-ENTRY_SLIPPAGE = Decimal("0.0005")     # 5 bps capped slippage on entry
-TP_FEE = Decimal("0.0002")             # maker fee on TP limit exit
-TP_SLIPPAGE = Decimal("0")             # zero slippage on TP limit
-SL_FEE = Decimal("0.0005")             # taker fee on SL stop-market exit
-SL_SLIPPAGE = Decimal("0.0005")        # 5 bps slippage on SL stop-market
-EXPIRED_FEE = Decimal("0.0005")        # taker-like fee on expired/time-out
-EXPIRED_SLIPPAGE = Decimal("0.0005")   # 5 bps slippage on time-out exit
+ENTRY_FEE = Decimal("0.0005")  # taker fee on limit-IOC entry
+ENTRY_SLIPPAGE = Decimal("0.0005")  # 5 bps capped slippage on entry
+TP_FEE = Decimal("0.0002")  # maker fee on TP limit exit
+TP_SLIPPAGE = Decimal("0")  # zero slippage on TP limit
+SL_FEE = Decimal("0.0005")  # taker fee on SL stop-market exit
+SL_SLIPPAGE = Decimal("0.0005")  # 5 bps slippage on SL stop-market
+EXPIRED_FEE = Decimal("0.0005")  # taker-like fee on expired/time-out
+EXPIRED_SLIPPAGE = Decimal("0.0005")  # 5 bps slippage on time-out exit
 
 
 class BacktestRunner:
@@ -105,15 +100,11 @@ class BacktestRunner:
         await self._seed_trades(SessionLocal, trades)
 
         # 5. Instantiate pipeline modules with isolated session factory
-        htf_scanner = HtfLevelScanner(
-            asyncio.Queue(), lookback=3, session_factory=SessionLocal
-        )
+        htf_scanner = HtfLevelScanner(asyncio.Queue(), lookback=3, session_factory=SessionLocal)
         microstructure = MicrostructureEngine(
             asyncio.Queue(), session_factory=SessionLocal, settle_delay=0
         )
-        sweep_detector = SweepDetector(
-            asyncio.Queue(), session_factory=SessionLocal
-        )
+        sweep_detector = SweepDetector(asyncio.Queue(), session_factory=SessionLocal)
         risk_sizer = RiskSizer(session_factory=SessionLocal)
 
         # 6. Replay
@@ -176,8 +167,7 @@ class BacktestRunner:
                     "exit_price": last_kline.close,
                     "exit_ts": last_kline.open_time,
                     "hold_minutes": int(
-                        (last_kline.open_time - sig_data["signal"].created_at).total_seconds()
-                        / 60
+                        (last_kline.open_time - sig_data["signal"].created_at).total_seconds() / 60
                     ),
                 }
                 result = self._compute_result(sig_data, exit_info)
@@ -324,7 +314,9 @@ class BacktestRunner:
         candles = []
         for _, row in df.iterrows():
             d = row.to_dict()
-            d["open_time"] = pd.Timestamp(d["open_time"]).to_pydatetime().replace(tzinfo=timezone.utc)
+            d["open_time"] = (
+                pd.Timestamp(d["open_time"]).to_pydatetime().replace(tzinfo=timezone.utc)
+            )
             d["open"] = Decimal(str(d["open"]))
             d["high"] = Decimal(str(d["high"]))
             d["low"] = Decimal(str(d["low"]))
@@ -359,9 +351,7 @@ class BacktestRunner:
             ltf.append(self._aggregate_chunk(chunk, self.timeframe))
         return ltf
 
-    def _form_htf_from_1m(
-        self, candles_1m: list[dict], interval: str, n: int
-    ) -> list[dict]:
+    def _form_htf_from_1m(self, candles_1m: list[dict], interval: str, n: int) -> list[dict]:
         htf: list[dict] = []
         for i in range(0, len(candles_1m), n):
             chunk = candles_1m[i : i + n]
@@ -452,9 +442,7 @@ class BacktestRunner:
             return signal.entry * (1 + ENTRY_SLIPPAGE)
         return signal.entry * (1 - ENTRY_SLIPPAGE)
 
-    def _slipped_exit(
-        self, signal: Signal, price: Decimal, exit_reason: str
-    ) -> Decimal:
+    def _slipped_exit(self, signal: Signal, price: Decimal, exit_reason: str) -> Decimal:
         if exit_reason == "tp":
             slippage = TP_SLIPPAGE
         elif exit_reason == "sl":
@@ -517,9 +505,7 @@ class BacktestRunner:
     ) -> dict[str, Any]:
         signal = sig_data["signal"]
         entry_slipped = sig_data["entry_slipped"]
-        exit_slipped = self._slipped_exit(
-            signal, exit_info["exit_price"], exit_info["exit_reason"]
-        )
+        exit_slipped = self._slipped_exit(signal, exit_info["exit_price"], exit_info["exit_reason"])
 
         if signal.side == "long":
             gross_pnl = (exit_slipped - entry_slipped) / entry_slipped
@@ -543,13 +529,9 @@ class BacktestRunner:
 
         # R multiple (based on intended prices, no fees)
         if signal.side == "long":
-            pnl_r = (exit_info["exit_price"] - signal.entry) / (
-                signal.entry - signal.stop_loss
-            )
+            pnl_r = (exit_info["exit_price"] - signal.entry) / (signal.entry - signal.stop_loss)
         else:
-            pnl_r = (signal.entry - exit_info["exit_price"]) / (
-                signal.stop_loss - signal.entry
-            )
+            pnl_r = (signal.entry - exit_info["exit_price"]) / (signal.stop_loss - signal.entry)
 
         return {
             "symbol": signal.symbol,
@@ -598,9 +580,7 @@ class BacktestRunner:
         avg_r = sum(pnl_rs) / total
 
         gross_profit = sum(r["net_pnl_pct"] for r in results if r["net_pnl_pct"] > 0)
-        gross_loss = abs(
-            sum(r["net_pnl_pct"] for r in results if r["net_pnl_pct"] < 0)
-        )
+        gross_loss = abs(sum(r["net_pnl_pct"] for r in results if r["net_pnl_pct"] < 0))
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
         # Max drawdown
@@ -684,13 +664,9 @@ async def main() -> None:
     args = parser.parse_args()
 
     start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    end = datetime.strptime(args.end, "%Y-%m-%d").replace(
-        tzinfo=timezone.utc
-    ) + timedelta(days=1)
+    end = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
 
-    runner = BacktestRunner(
-        args.symbol, start, end, args.timeframe, no_fill_rate=args.no_fill_rate
-    )
+    runner = BacktestRunner(args.symbol, start, end, args.timeframe, no_fill_rate=args.no_fill_rate)
     await runner.run()
 
 
