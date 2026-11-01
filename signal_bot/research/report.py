@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import html
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +125,11 @@ def line_chart(
         )
     for i in range(5):
         xv = x0 + (x1 - x0) * i / 4
-        lab = datetime.fromtimestamp(xv).strftime("%b %Y") if x_is_time else f"{xv:g}x"
+        lab = (
+            datetime.fromtimestamp(xv, tz=timezone.utc).strftime("%b %Y")
+            if x_is_time
+            else f"{xv:g}x"
+        )
         anchor = "start" if i == 0 else "end" if i == 4 else "middle"
         out.append(
             f'<text class="axis" x="{L + (xv - x0) / max(1e-9, x1 - x0) * (width - L - R):.1f}" y="{height - 6}" text-anchor="{anchor}">{esc(lab)}</text>'

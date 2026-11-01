@@ -12,6 +12,7 @@ import json
 import logging
 import random
 import tomllib
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -73,12 +74,19 @@ def _window(intents: list[Intent], frame: pd.DataFrame, start, end) -> list[Inte
 
 
 def _run(frame, intents, cost, sizing, symbol, start=None, end=None):
-    sel = intents if start is None else _window(intents, frame, start, end)
-    trades, equity = simulate(frame, sel, cost, sizing, symbol)
-    if start is not None:
-        equity = equity[(equity.index >= start) & (equity.index < end)]
-        if equity.empty:
-            equity = pd.Series([sizing.initial_equity], index=[start])
+    if start is None:
+        return simulate(frame, intents, cost, sizing, symbol)
+    # Simulate only the window (plus room for the longest hold) instead of the full frame.
+    sel = _window(intents, frame, start, end)
+    lo = int(frame.index.searchsorted(start))
+    hi = int(frame.index.searchsorted(end))
+    tail = max((it.max_hold_bars for it in sel), default=0) + 2
+    sub = frame.iloc[lo : min(len(frame), hi + tail)]
+    shifted = [replace(it, bar=it.bar - lo) for it in sel]
+    trades, equity = simulate(sub, shifted, cost, sizing, symbol)
+    equity = equity[(equity.index >= start) & (equity.index < end)]
+    if equity.empty:
+        equity = pd.Series([sizing.initial_equity], index=[start])
     return trades, equity
 
 

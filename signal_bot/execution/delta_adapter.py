@@ -259,13 +259,22 @@ class DeltaExchangeAdapter:
         return parse_order(body)
 
     async def cancel_order(self, client_order_id: str, exchange_order_id: str | None) -> None:
-        if not exchange_order_id:
-            found = await self.get_order(client_order_id)
-            if found is None or not found.exchange_order_id:
-                return
-            exchange_order_id = found.exchange_order_id
+        # Delta's DELETE /v2/orders needs the product as well as the order id.
+        found = await self.get_order(client_order_id)
+        if found is None or not (exchange_order_id or found.exchange_order_id):
+            return
+        exchange_order_id = exchange_order_id or found.exchange_order_id
         try:
-            await self._call("cancel_order", self.client.cancel_order(exchange_order_id))
+            product_id = self._product_id(found.symbol)
+        except KeyError:
+            product_id = None
+        try:
+            await self._call(
+                "cancel_order",
+                self.client.cancel_order(
+                    exchange_order_id, product_id=product_id, product_symbol=found.symbol or None
+                ),
+            )
         except (TimeoutError, aiohttp.ClientError, ConnectionError) as exc:
             raise ExchangeUnavailable(str(exc)) from exc
 
@@ -281,6 +290,11 @@ class DeltaExchangeAdapter:
 
     async def positions(self) -> list[ExchangePosition]:
         out: list[ExchangePosition] = []
+        # A stop counts as present if the position carries bracket SL fields *or* a
+        # reduce-side stop-loss order is resting for that product (VERIFY on testnet).
+        stop_orders = {
+            o.symbol for o in await self.open_orders() if o.purpose == FillPurpose.STOP_LOSS
+        }
         for venue_symbol, product in self.client.symbol_map._products.items():
             if venue_symbol not in self.client.symbol_map._delta_to_binance:
                 continue
@@ -307,7 +321,8 @@ class DeltaExchangeAdapter:
                         if row.get("entry_price")
                         else None,
                         # VERIFY: Delta exposes attached bracket prices on the position.
-                        has_stop_loss=bool(row.get("bracket_stop_loss_price")),
+                        has_stop_loss=bool(row.get("bracket_stop_loss_price"))
+                        or str(row.get("product_symbol") or venue_symbol) in stop_orders,
                         has_take_profit=bool(row.get("bracket_take_profit_price")),
                         stop_loss_price=_dec(row["bracket_stop_loss_price"])
                         if row.get("bracket_stop_loss_price")

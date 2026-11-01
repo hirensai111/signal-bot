@@ -327,11 +327,7 @@ class SimulatedVenue:
         if request.order_type in ("limit_ioc", "market"):
             events += self._match_taker(order, order.purpose)
             if order.filled < request.size:
-                order.state = (
-                    VenueOrderState.FILLED
-                    if order.filled >= request.size
-                    else VenueOrderState.CANCELLED
-                )
+                order.state = VenueOrderState.CANCELLED
                 order.reason = "ioc_remainder_cancelled" if order.filled > 0 else "ioc_no_liquidity"
             else:
                 order.state = VenueOrderState.FILLED

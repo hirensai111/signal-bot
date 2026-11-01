@@ -352,10 +352,10 @@ class DeltaClient:
         product_symbol: str | None = None,
     ) -> dict:
         body: dict[str, Any] = {"id": int(order_id)}
-        if product_symbol is not None:
-            body["product_symbol"] = product_symbol
-        elif product_id is not None:
+        if product_id is not None:
             body["product_id"] = product_id
+        elif product_symbol is not None:
+            body["product_symbol"] = product_symbol
         return await self._request("DELETE", "/v2/orders", data=body)
 
     async def cancel_all_orders(self, product_id: int | None = None) -> dict:
@@ -497,6 +497,7 @@ class DeltaWebSocket:
         self._running = False
         self._task: asyncio.Task | None = None
         self.connected = False
+        self._reported_down = False
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -545,8 +546,14 @@ class DeltaWebSocket:
             await self.delta_events(event)
 
     async def _mark_disconnected(self, reason: str) -> None:
+        """Report the transition to 'down' once, not on every failed reconnect attempt."""
         was_connected, self.connected = self.connected, False
-        if self.on_disconnect is not None and (was_connected or reason.startswith("error")):
+        if was_connected:
+            self._reported_down = False
+        if self._reported_down:
+            return
+        self._reported_down = True
+        if self.on_disconnect is not None:
             try:
                 await self.on_disconnect(reason)
             except Exception:

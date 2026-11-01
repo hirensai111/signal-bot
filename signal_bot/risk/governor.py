@@ -223,7 +223,10 @@ class RiskGovernor:
                 .select_from(Signal)
                 .where(Signal.status.in_(SIGNAL_EXPOSURE_STATUSES))
             )
-            open_count = max(open_count or 0, self._exchange_open_positions or 0)
+            # Local exposure only: venue positions we don't own are blocked separately by
+            # the reconciler's orphan_position breaker, and a cached venue count would go
+            # stale between reconciliation passes.
+            open_count = open_count or 0
             state.current_open_positions = open_count
             metrics.OPEN_POSITIONS.set(open_count)
             await session.commit()

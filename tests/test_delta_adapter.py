@@ -155,3 +155,44 @@ def test_ws_position_and_unknown_messages():
     )
     assert pos.event_type == "EXCHANGE_POSITION_UPDATE" and pos.payload["size"] == "0"
     assert normalize_ws_message({"type": "heartbeat"}) == []
+
+
+async def test_cancel_sends_product_with_order_id():
+    from signal_bot.execution.delta_adapter import DeltaExchangeAdapter
+
+    client = MagicMock()
+    client.get_order_by_client_id = AsyncMock(
+        return_value={
+            "result": {
+                "id": 9,
+                "client_order_id": "sig_a",
+                "product_symbol": "BTCUSD",
+                "state": "open",
+                "size": 1,
+                "unfilled_size": 1,
+                "side": "buy",
+            }
+        }
+    )
+    client.symbol_map._products = {"BTCUSD": {"id": 27}}
+    client.cancel_order = AsyncMock(return_value={})
+    await DeltaExchangeAdapter(client).cancel_order("sig_a", None)
+    client.cancel_order.assert_awaited_once_with("9", product_id=27, product_symbol="BTCUSD")
+
+
+async def test_ws_reports_down_once_while_never_connected():
+    import aiohttp
+
+    from signal_bot.delta.client import DeltaClient, DeltaWebSocket
+
+    calls = []
+
+    async def on_down(reason):
+        calls.append(reason)
+
+    ws = DeltaWebSocket(
+        DeltaClient(api_key="k", api_secret="s", mode="testnet"), AsyncMock(), on_disconnect=on_down
+    )
+    for _ in range(5):
+        await ws._mark_disconnected(f"error: {aiohttp.ClientError.__name__}")
+    assert len(calls) == 1

@@ -62,7 +62,7 @@ class OpsServer:
         self.host = host
         self.port = port
         self._runner: web.AppRunner | None = None
-        self._failed_auth: list[float] = []
+        self._failed_auth: dict[str | None, list[float]] = {}
         self.app = self.build_app()
 
     def build_app(self) -> web.Application:
@@ -141,10 +141,12 @@ class OpsServer:
             return False
         return hmac.compare_digest(header[7:].encode(), self.operator_token.encode())
 
-    def _locked_out(self) -> bool:
+    def _locked_out(self, ip: str | None) -> bool:
+        """Per-source-IP throttle on failed tokens (never a global lockout)."""
         cutoff = time.monotonic() - _FAILED_AUTH_WINDOW
-        self._failed_auth = [t for t in self._failed_auth if t > cutoff]
-        return len(self._failed_auth) >= _FAILED_AUTH_LIMIT
+        recent = [t for t in self._failed_auth.get(ip, []) if t > cutoff]
+        self._failed_auth[ip] = recent
+        return len(recent) >= _FAILED_AUTH_LIMIT
 
     async def _audit(self, actor, action, reason, ip, ok) -> None:
         try:
@@ -166,10 +168,13 @@ class OpsServer:
         ip = request.remote
         if not self.operator_token:
             return None, _json({"error": "control endpoints disabled (no OPERATOR_TOKEN)"}, 403)
-        if self._locked_out():
+        authorised = self._authorised(request)
+        # A valid token may always *halt* (the safe direction), even from a throttled
+        # address, so failed guesses by someone else can never block an emergency stop.
+        if self._locked_out(ip) and not (authorised and action == "halt"):
             return None, _json({"error": "too many failed attempts; try later"}, 429)
-        if not self._authorised(request):
-            self._failed_auth.append(time.monotonic())
+        if not authorised:
+            self._failed_auth.setdefault(ip, []).append(time.monotonic())
             await self._audit("unauthenticated", action, "bad token", ip, False)
             return None, _json({"error": "unauthorised"}, 401)
         try:
@@ -182,7 +187,13 @@ class OpsServer:
         actor = str(body.get("operator") or "operator").strip() or "operator"
         if len(reason) < 3:
             return None, _json({"error": "a reason (>= 3 chars) is required"}, 400)
-        return {"reason": reason[:MAX_REASON_LEN], "actor": f"ops:{actor}", "ip": ip, **body}, None
+        parsed = {
+            "reason": reason[:MAX_REASON_LEN],
+            "actor": f"ops:{actor[:40]}",
+            "ip": ip,
+            "confirm": body.get("confirm"),
+        }
+        return parsed, None
 
     async def halt(self, request: web.Request) -> web.Response:
         parsed, error = await self._parse(request, "halt")

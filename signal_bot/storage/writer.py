@@ -30,6 +30,8 @@ from signal_bot.observability import metrics
 
 logger = logging.getLogger(__name__)
 
+MAX_BUFFERED_TRADES = 200_000
+
 INTERVAL_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
 
 
@@ -114,6 +116,8 @@ class QueueWriter:
         }
         self._pending_emit: list[Kline] = []
         self.healthy = True
+        self._retry_delay = 0.0
+        self._retry_at = 0.0
 
     def subscribe(
         self,
@@ -155,6 +159,8 @@ class QueueWriter:
 
     async def _flush_if_needed(self, session) -> None:
         now = asyncio.get_running_loop().time()
+        if now < self._retry_at:
+            return  # backing off after a failed flush
         size_reached = any(len(batch) >= self.batch_size for batch in self._batches.values())
         # A closed candle forces a flush so downstream engines see it promptly.
         if size_reached or self._pending_emit or (now - self._last_flush >= self.flush_interval):
@@ -193,8 +199,18 @@ class QueueWriter:
             if self.healthy:
                 logger.exception("Candle/trade flush failed; will retry")
             self.healthy = False
+            self._retry_delay = min(max(self._retry_delay * 2, 0.5), 30.0)
+            self._retry_at = asyncio.get_running_loop().time() + self._retry_delay
+            # Bound memory during long outages: trades are the bulk and least critical.
+            trades = self._batches["agg_trades"]
+            if len(trades) > MAX_BUFFERED_TRADES:
+                dropped = len(trades) - MAX_BUFFERED_TRADES
+                del trades[:dropped]
+                metrics.CANDLES_DROPPED.labels("trade_buffer_overflow").inc(dropped)
             return
         self.healthy = True
+        self._retry_delay = 0.0
+        self._retry_at = 0.0
         for batch in self._batches.values():
             batch.clear()
         pending, self._pending_emit = self._pending_emit, []

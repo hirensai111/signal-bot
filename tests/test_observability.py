@@ -97,11 +97,13 @@ async def test_resume_requires_typed_confirmation(ops):
     assert r.status == 200 and h.governor.gate_open() == (True, None)
 
 
-async def test_repeated_bad_tokens_lock_out(ops):
+async def test_repeated_bad_tokens_throttle_resume_from_that_address(ops):
     _, client, _ = ops
     for _ in range(10):
         await client.post("/api/risk/halt", json={"reason": "xyz"}, headers=_auth("bad"))
-    r = await client.post("/api/risk/halt", json={"reason": "xyz"}, headers=_auth())
+    r = await client.post(
+        "/api/risk/resume", json={"reason": "xyz", "confirm": "RESUME"}, headers=_auth()
+    )
     assert r.status == 429
 
 
@@ -148,3 +150,22 @@ def test_dashboards_and_alerts_only_reference_real_metrics():
     )
     used = set(re.findall(r"signalbot_[a-z_]+", text))
     assert used and used <= names, used - names
+
+
+async def test_body_cannot_override_audited_actor_or_ip(ops):
+    h, client, _ = ops
+    await client.post(
+        "/api/risk/halt",
+        json={"reason": "drill", "operator": "ana", "actor": "execution_engine", "ip": "10.9.9.9"},
+        headers=_auth(),
+    )
+    audit = (await (await client.get("/api/status")).json())["audit"]
+    assert audit[0]["actor"] == "ops:ana"
+
+
+async def test_failed_guesses_never_block_a_valid_halt(ops):
+    h, client, _ = ops
+    for _ in range(12):
+        await client.post("/api/risk/halt", json={"reason": "xyz"}, headers=_auth("bad"))
+    r = await client.post("/api/risk/halt", json={"reason": "real emergency"}, headers=_auth())
+    assert r.status == 200 and h.governor.gate_open()[0] is False
