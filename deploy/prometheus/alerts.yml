@@ -1,0 +1,49 @@
+groups:
+  - name: signal-bot
+    rules:
+      - alert: BotDown
+        expr: up{job="signal-bot"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "Signal bot is not being scraped"}
+      - alert: KillSwitchEngaged
+        expr: signalbot_kill_switch_active == 1
+        labels: {severity: critical}
+        annotations: {summary: "Kill switch engaged: all new orders refused"}
+      - alert: RiskGovernorUnhealthy
+        expr: signalbot_risk_governor_healthy == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "Risk governor cannot evaluate limits (failing closed)"}
+      - alert: ProtectiveOrderFailure
+        expr: increase(signalbot_protective_order_failures_total[10m]) > 0
+        labels: {severity: critical}
+        annotations: {summary: "An entry filled without a confirmed stop"}
+      - alert: UnknownSubmission
+        expr: increase(signalbot_order_submission_unknown_total[10m]) > 0
+        labels: {severity: warning}
+        annotations: {summary: "An order submission outcome was ambiguous"}
+      - alert: MarketDataStale
+        expr: max(signalbot_market_data_age_seconds{interval="1m"}) > 180
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "No fresh 1m candles for 3 minutes"}
+      - alert: EventBacklogGrowing
+        expr: max(signalbot_event_queue_lag) > 500
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "A consumer is falling behind the event bus"}
+      - alert: JournalUnavailable
+        expr: signalbot_journal_pending_events > 0
+        for: 2m
+        labels: {severity: critical}
+        annotations: {summary: "Durable events are buffered in memory (database unavailable)"}
+      - alert: ReconciliationDiscrepancies
+        expr: increase(signalbot_reconciliation_discrepancies_total[15m]) > 0
+        labels: {severity: warning}
+        annotations: {summary: "Local state disagreed with the exchange"}
+      - alert: ExchangeStreamDown
+        expr: min(signalbot_exchange_stream_connected) == 0
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: "Private exchange stream disconnected; trading blocked"}

@@ -1,0 +1,56 @@
+# Paper-trading stack: bot + PostgreSQL + Prometheus + Grafana.
+#   cp .env.example .env   # set OPERATOR_TOKEN (required: the ops port is published)
+#   SIGNAL_BOT_COMMIT=$(git rev-parse HEAD) docker compose up --build
+# Control room: http://127.0.0.1:8080  Grafana: http://127.0.0.1:3000  Prometheus: http://127.0.0.1:9090
+# Every port is bound to localhost only.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: signalbot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-signalbot}
+      POSTGRES_DB: signal_bot
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "signalbot"]
+      interval: 5s
+      retries: 10
+
+  bot:
+    build:
+      context: .
+      args:
+        SIGNAL_BOT_COMMIT: ${SIGNAL_BOT_COMMIT:-unknown}
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://signalbot:${POSTGRES_PASSWORD:-signalbot}@postgres:5432/signal_bot
+      EXEC_MODE: ${EXEC_MODE:-paper}
+      OPS_HOST: 0.0.0.0
+      PAPER_STATE_PATH: /home/bot/data/paper_state.json
+    volumes: [botdata:/home/bot/data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["127.0.0.1:8080:8080"]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports: ["127.0.0.1:9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+
+volumes:
+  pgdata:
+  botdata:

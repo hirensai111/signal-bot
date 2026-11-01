@@ -8,6 +8,7 @@ background loops, so scenario tests are reproducible.
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -92,11 +93,17 @@ class Harness:
         unknown_grace_seconds: float = 300.0,
         book: bool = True,
         db_name: str = "harness.db",
+        db_url: str | None = None,
+        reset_db: bool = True,
     ) -> Harness:
         h = cls()
         h.tmp_path = tmp_path
-        h.db_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / db_name}")
+        # SCENARIO_DB_URL lets CI run the whole execution suite against PostgreSQL.
+        db_url = db_url or os.environ.get("SCENARIO_DB_URL")
+        h.db_engine = create_async_engine(db_url or f"sqlite+aiosqlite:///{tmp_path / db_name}")
         async with h.db_engine.begin() as conn:
+            if db_url and reset_db:
+                await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
         raw = async_sessionmaker(h.db_engine, class_=AsyncSession, expire_on_commit=False)
         h.raw_factory = raw

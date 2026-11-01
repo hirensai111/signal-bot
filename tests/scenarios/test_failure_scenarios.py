@@ -163,7 +163,7 @@ async def test_crash_after_submit_recovers_from_intent_and_venue_state(tmp_path)
     assert order.state == S.SUBMISSION_UNKNOWN
 
     # "Restart": fresh engine/reconciler objects over the same database and venue.
-    restarted = await Harness.create(tmp_path, book=False)
+    restarted = await Harness.create(tmp_path, book=False, reset_db=False)
     restarted.venue = h.venue
     restarted.engine.adapter = restarted.reconciler.adapter = h.venue
     restarted.monitor.adapter = h.venue

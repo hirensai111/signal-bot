@@ -13,6 +13,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     PrimaryKeyConstraint,
@@ -82,7 +83,11 @@ class Candle5m(Base):
 
 class AggTrade(Base):
     __tablename__ = "agg_trades"
-    __table_args__ = (PrimaryKeyConstraint("symbol", "trade_id", name="pk_agg_trades"),)
+    __table_args__ = (
+        PrimaryKeyConstraint("symbol", "trade_id", name="pk_agg_trades"),
+        # The microstructure engine sums trades by time window for every candle.
+        Index("idx_agg_trades_symbol_ts", "symbol", "ts"),
+    )
 
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
     trade_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -95,6 +100,9 @@ class AggTrade(Base):
 
 class HtfLevel(Base):
     __tablename__ = "htf_levels"
+    __table_args__ = (
+        Index("idx_htf_levels_symbol_timeframe_active", "symbol", "timeframe", "active"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4, sort_order=-1)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
@@ -123,7 +131,7 @@ class Signal(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, nullable=False
     )
-    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
 
     # Delta execution fields
     client_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)

@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: signal-bot
+    folder: Signal Bot
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
