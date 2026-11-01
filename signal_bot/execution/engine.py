@@ -23,8 +23,10 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+
+from sqlalchemy import select
 
 from signal_bot.core.clock import SYSTEM_CLOCK, Clock, utc
 from signal_bot.db.connection import AsyncSessionLocal
@@ -487,7 +489,7 @@ class ExecutionEngine:
             self._awaiting.setdefault(
                 update.client_order_id,
                 utc(result.order.submitted_at or result.order.created_at)
-                + _seconds(self.config.no_fill_timeout),
+                + timedelta(seconds=self.config.no_fill_timeout),
             )
         if state in (S.PARTIALLY_FILLED, S.FILLED):
             self._spawn(self.ensure_protection(update.client_order_id), "exec-protect")
@@ -644,8 +646,8 @@ class ExecutionEngine:
                     await self.adapter.cancel_order(coid, order.exchange_order_id)
                 except ExchangeError as exc:
                     logger.warning("Cancel for %s failed (%s); will poll", coid, exc)
-            elif state == S.CANCEL_PENDING and now >= deadline + _seconds(
-                self.config.cancel_confirm_timeout
+            elif state == S.CANCEL_PENDING and now >= deadline + timedelta(
+                seconds=self.config.cancel_confirm_timeout
             ):
                 await self._transition(coid, S.RECONCILIATION_REQUIRED, "cancel not confirmed")
                 self.governor.set_breaker(f"unresolved_order:{coid}", "cancel not confirmed")
@@ -658,7 +660,9 @@ class ExecutionEngine:
             [S.ACKNOWLEDGED, S.PARTIALLY_FILLED, S.CANCEL_PENDING]
         ):
             start = utc(order.submitted_at or order.created_at)
-            self._awaiting[order.client_order_id] = start + _seconds(self.config.no_fill_timeout)
+            self._awaiting[order.client_order_id] = start + timedelta(
+                seconds=self.config.no_fill_timeout
+            )
         for order in await self.store.in_states([S.FILLED, S.PARTIALLY_FILLED]):
             if order.protective_status not in (
                 "confirmed",
@@ -670,9 +674,7 @@ class ExecutionEngine:
 
     async def _expire_stale_pending_signals(self) -> None:
         """Signals that were queued in memory when the process died are now stale."""
-        from sqlalchemy import select
-
-        cutoff = self.clock.now() - _seconds(self.config.max_signal_age_seconds)
+        cutoff = self.clock.now() - timedelta(seconds=self.config.max_signal_age_seconds)
         async with self.session_factory() as session:
             rows = await session.execute(
                 select(Signal).where(Signal.status == "pending", Signal.client_order_id.is_(None))
@@ -751,12 +753,3 @@ class ExecutionEngine:
             return Decimal("0")
         position_notional = risk_amount / stop_distance_pct
         return position_notional / (contract_value * signal.entry)
-
-    # legacy aliases used by older call sites/tests
-    _round_to_tick = round_to_tick
-
-
-def _seconds(value: float):
-    from datetime import timedelta
-
-    return timedelta(seconds=value)

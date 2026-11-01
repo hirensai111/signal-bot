@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -276,10 +278,7 @@ class LiquiditySweepBaseline:
 
     def _cached_signals(self, data: Dataset) -> list[dict]:
         """Replaying a year through the live modules takes minutes: cache by data snapshot."""
-        import json
-        from pathlib import Path
-
-        from signal_bot.backtest.runner import replay_live_signals
+        from signal_bot.backtest.runner import replay_live_signals  # heavy: DB-backed modules
 
         key = f"{data.symbol}_{self.timeframe}_{data.snapshot_id}_v{self.version}"
         path = Path(self.cache_dir) / "sweep_signals" / f"{key}.json"

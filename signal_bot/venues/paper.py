@@ -82,7 +82,6 @@ class PaperBroker(SimulatedVenue):
         self._persisted_ledger = 0
         self._running = False
         self.last_book_error: str | None = None
-        self.latency_in_calls = False  # latency is applied *before* the book refresh instead
 
     # ------------------------------------------------------------------
     async def refresh_book(self, symbol: str) -> BookSnapshot:
@@ -99,17 +98,17 @@ class PaperBroker(SimulatedVenue):
         await self.refresh_book(symbol)
         return await super().order_book(symbol)
 
+    async def _before_match(self, symbol: str) -> None:
+        # Runs after the simulated latency, so orders match the book as it is *then*.
+        await self.refresh_book(symbol)
+
     async def place_order(self, request: OrderRequest) -> ExchangeOrder:
-        if self.costs.latency_seconds:
-            await asyncio.sleep(self.costs.latency_seconds)
-        await self.refresh_book(request.symbol)  # match against the book *after* latency
         try:
             return await super().place_order(request)
         finally:
             await self.checkpoint()
 
     async def close_position(self, symbol: str, client_order_id: str) -> ExchangeOrder:
-        await self.refresh_book(symbol)
         try:
             return await super().close_position(symbol, client_order_id)
         finally:
@@ -190,35 +189,14 @@ class PaperBroker(SimulatedVenue):
             return
         try:
             async with self.session_factory() as session:
-                for entry in pending:
-                    session.add(
-                        PaperLedgerEntry(
-                            entry_id=entry.entry_id,
-                            kind=entry.kind,
-                            symbol=entry.symbol,
-                            amount=entry.amount,
-                            balance_after=entry.balance_after,
-                            reference=entry.reference,
-                            occurred_at=entry.occurred_at,
-                        )
-                    )
+                session.add_all([_ledger_row(e) for e in pending])
                 await session.commit()
         except IntegrityError:
             # Some entries already persisted (e.g. after restore): insert one by one.
             for entry in pending:
                 try:
                     async with self.session_factory() as session:
-                        session.add(
-                            PaperLedgerEntry(
-                                entry_id=entry.entry_id,
-                                kind=entry.kind,
-                                symbol=entry.symbol,
-                                amount=entry.amount,
-                                balance_after=entry.balance_after,
-                                reference=entry.reference,
-                                occurred_at=entry.occurred_at,
-                            )
-                        )
+                        session.add(_ledger_row(entry))
                         await session.commit()
                 except IntegrityError:
                     pass
@@ -301,3 +279,15 @@ class PaperBroker(SimulatedVenue):
             len(self._orders),
         )
         return True
+
+
+def _ledger_row(entry) -> PaperLedgerEntry:
+    return PaperLedgerEntry(
+        entry_id=entry.entry_id,
+        kind=entry.kind,
+        symbol=entry.symbol,
+        amount=entry.amount,
+        balance_after=entry.balance_after,
+        reference=entry.reference,
+        occurred_at=entry.occurred_at,
+    )

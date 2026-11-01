@@ -412,17 +412,7 @@ def run_experiment(
             "symbols": [d.symbol for d in datasets],
             "timeframe": results[0]["timeframe"] if results else None,
         },
-        "data": [
-            {
-                "symbol": d.symbol,
-                "source": d.source,
-                "synthetic": d.synthetic,
-                "snapshot_id": d.snapshot_id,
-                "quality": {k: v for k, v in d.quality().items() if k != "gaps"},
-                "gaps": d.quality()["gaps"][:10],
-            }
-            for d in datasets
-        ],
+        "data": [_data_section(d) for d in datasets],
         "costs": _costs(cfg).to_dict(),
         "sizing": _sizing(cfg).__dict__,
         "results": results,
@@ -456,6 +446,18 @@ def run_experiment(
         ).encode()
     ).hexdigest()[:16]
     return report
+
+
+def _data_section(d: Dataset) -> dict[str, Any]:
+    q = d.quality()
+    return {
+        "symbol": d.symbol,
+        "source": d.source,
+        "synthetic": d.synthetic,
+        "snapshot_id": d.snapshot_id,
+        "quality": {k: v for k, v in q.items() if k != "gaps"},
+        "gaps": q["gaps"][:10],
+    }
 
 
 def _pool(perfs: list[dict[str, Any]]) -> dict[str, Any]:

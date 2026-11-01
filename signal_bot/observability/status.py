@@ -15,7 +15,6 @@ from typing import Any
 from sqlalchemy import select
 
 from signal_bot.db.models import OperatorAudit, Order
-from signal_bot.storage.writer import INTERVAL_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +46,9 @@ class StatusService:
     def market_data(self) -> dict[str, Any]:
         if self.fanout is None:
             return {}
-        now = datetime.now(timezone.utc)
-        out = {}
-        for (symbol, interval), open_time in self.fanout._last_forwarded.items():
-            close = open_time.timestamp() + INTERVAL_SECONDS.get(interval, 60)
-            out.setdefault(symbol, {})[interval] = round(now.timestamp() - close, 1)
+        out: dict[str, dict[str, float]] = {}
+        for (symbol, interval), age in self.fanout.ages(datetime.now(timezone.utc)).items():
+            out.setdefault(symbol, {})[interval] = round(age, 1)
         return out
 
     def components(self) -> list[dict[str, Any]]:

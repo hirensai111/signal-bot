@@ -160,7 +160,7 @@ class OutcomeMonitor:
 
     async def reconstruct_close(self, order: Order) -> bool:
         """Fetch exit fills from the venue if the stream didn't deliver them, then close."""
-        fills = [f for f in await self.store.fills_for(order.client_order_id)]
+        fills = await self.store.fills_for(order.client_order_id)
         if not any(f.purpose in EXIT_PURPOSES for f in fills) and self.adapter is not None:
             for attempt in range(self.exit_fill_retries):
                 try:

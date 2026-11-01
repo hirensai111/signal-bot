@@ -208,7 +208,6 @@ class SimulatedVenue:
         self.clock = clock
         self.costs = costs or CostModel()
         self.faults = FaultPlan()
-        self.latency_in_calls = True
         self._instruments = dict(instruments)
         self._venue_to_binance = {spec.symbol: b for b, spec in instruments.items()}
         self._books: dict[str, BookSnapshot] = {}
@@ -276,7 +275,7 @@ class SimulatedVenue:
     async def _enter(self, op: str, subject: Any = None) -> Fault | None:
         self.calls[op] = self.calls.get(op, 0) + 1
         fault = self.faults.take(op, subject)
-        if self.costs.latency_seconds and self.latency_in_calls:
+        if self.costs.latency_seconds:
             await asyncio.sleep(self.costs.latency_seconds)
         if fault is None:
             return None
@@ -306,8 +305,12 @@ class SimulatedVenue:
         await self._enter("set_leverage", symbol)
         self._positions.setdefault(symbol, _Position(symbol)).leverage = leverage
 
+    async def _before_match(self, symbol: str) -> None:
+        """Hook run after call latency, before matching (the paper broker refreshes its book)."""
+
     async def place_order(self, request: OrderRequest) -> ExchangeOrder:
         fault = await self._enter("place_order", request)
+        await self._before_match(request.symbol)
         if request.client_order_id in self._orders:
             raise OrderRejected("duplicate client_order_id")
         if request.size <= 0:
@@ -421,6 +424,7 @@ class SimulatedVenue:
 
     async def close_position(self, symbol: str, client_order_id: str) -> ExchangeOrder:
         fault = await self._enter("close_position", client_order_id)
+        await self._before_match(symbol)
         pos = self._positions.get(symbol)
         if pos is None or pos.size == 0:
             raise OrderRejected("no position to close")
@@ -640,8 +644,6 @@ class SimulatedVenue:
         self._ledger.append(entry)
 
     def _post_amount(self, entry_id, kind, symbol, amount: Decimal, reference) -> None:
-        if any(e.entry_id == entry_id for e in self._ledger[-50:]):
-            return
         self.cash += amount
         self._post(
             LedgerEntry(entry_id, kind, symbol, amount, self.cash, reference, self.clock.now())

@@ -15,6 +15,7 @@ a report pins exactly which data produced it.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import io
 import logging
@@ -67,7 +68,7 @@ class Dataset:
     source: str
     synthetic: bool = False
 
-    @property
+    @functools.cached_property
     def snapshot_id(self) -> str:
         return snapshot_id(self.frame)
 

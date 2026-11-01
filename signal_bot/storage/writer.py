@@ -90,6 +90,13 @@ class CandleFanout:
     def last_candle_time(self, symbol: str, interval: str) -> datetime | None:
         return self._last_forwarded.get((symbol, interval))
 
+    def ages(self, now: datetime) -> dict[tuple[str, str], float]:
+        """Seconds since each (symbol, interval)'s latest forwarded candle closed."""
+        return {
+            key: (now - close_time(open_time, key[1])).total_seconds()
+            for key, open_time in self._last_forwarded.items()
+        }
+
 
 class QueueWriter:
     """Consumes the ingest queue, batches DB inserts, and emits closed-candle events."""

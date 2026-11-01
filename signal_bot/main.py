@@ -46,7 +46,7 @@ from signal_bot.provenance import git_info, package_version
 from signal_bot.risk.governor import RiskGovernor
 from signal_bot.signals.risk_sizer import RiskSizer
 from signal_bot.signals.sweep_detector import SweepDetector
-from signal_bot.storage.writer import QueueWriter, candle_close_time, close_time
+from signal_bot.storage.writer import QueueWriter, candle_close_time
 from signal_bot.tracking.outcome_monitor import OutcomeMonitor
 from signal_bot.tracking.reconciliation import Reconciler
 from signal_bot.venues.paper import PaperBroker
@@ -219,9 +219,7 @@ async def housekeeping(bus: EventBus, writer: QueueWriter, shutdown: asyncio.Eve
                 logger.warning(
                     "Journal still unavailable (%d buffered)", bus.pending_journal_writes
                 )
-        now = datetime.now(timezone.utc)
-        for (symbol, interval), open_time in writer.fanout._last_forwarded.items():
-            age = (now - close_time(open_time, interval)).total_seconds()
+        for (symbol, interval), age in writer.fanout.ages(datetime.now(timezone.utc)).items():
             metrics.MARKET_DATA_AGE.labels(symbol, interval).set(age)
         for name, sub in bus.subscriptions.items():
             metrics.EVENT_QUEUE_LAG.labels(name).set(sub.lag)
