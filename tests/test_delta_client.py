@@ -17,6 +17,7 @@ from signal_bot.delta.client import (
     WS_AUTH_PATH,
     DeltaClient,
     DeltaWebSocket,
+    DeltaWebSocketAuthError,
 )
 
 
@@ -284,21 +285,65 @@ async def test_symbol_map_loads_and_translates():
 
 
 @pytest.mark.asyncio
-async def test_symbol_map_hard_fails_on_missing_symbol():
+async def test_symbol_map_keeps_mapped_symbols_and_reports_missing():
+    """Testnet lists no LINKUSD/AVAXUSD: trade what maps, report the rest, don't crash."""
     client = DeltaClient(api_key="k", api_secret="s", mode="testnet")
     client._session = MagicMock()
-
-    partial = {
-        "products": [
-            {"id": 27, "symbol": "BTCUSD"},
-            {"id": 28, "symbol": "ETHUSD"},
-            # missing SOLUSD, LINKUSD, AVAXUSD, ADAUSD
-        ]
-    }
+    partial = {"products": [{"id": 27, "symbol": "BTCUSD"}, {"id": 28, "symbol": "ETHUSD"}]}
 
     with patch.object(client, "_request", new_callable=AsyncMock, return_value=partial):
+        await client.symbol_map.load()
+
+    assert client.symbol_map.delta_symbols == ["BTCUSD", "ETHUSD"]
+    assert any(m.startswith("SOLUSDT") for m in client.symbol_map.missing)
+    with pytest.raises(KeyError):
+        client.symbol_map.get_delta_symbol("SOLUSDT")
+
+
+@pytest.mark.asyncio
+async def test_symbol_map_strict_or_nothing_mapped_fails():
+    client = DeltaClient(api_key="k", api_secret="s", mode="testnet")
+    client._session = MagicMock()
+    partial = {"products": [{"id": 27, "symbol": "BTCUSD"}]}
+    with patch.object(client, "_request", new_callable=AsyncMock, return_value=partial):
         with pytest.raises(RuntimeError, match="Symbols not available on Delta India"):
-            await client.symbol_map.load()
+            await client.symbol_map.load(strict=True)
+
+    empty = DeltaClient(api_key="k", api_secret="s", mode="testnet")
+    empty._session = MagicMock()
+    with patch.object(empty, "_request", new_callable=AsyncMock, return_value={"products": []}):
+        with pytest.raises(RuntimeError):
+            await empty.symbol_map.load()
+
+
+@pytest.mark.asyncio
+async def test_symbol_map_only_maps_live_perpetuals():
+    client = DeltaClient(api_key="k", api_secret="s", mode="testnet")
+    client._session = MagicMock()
+    products = {
+        "result": [
+            {"id": 1, "symbol": "BTCUSD", "contract_type": "perpetual_futures", "state": "expired"},
+            {"id": 2, "symbol": "ETHUSD", "contract_type": "call_options", "state": "live"},
+            {"id": 3, "symbol": "SOLUSD", "contract_type": "perpetual_futures", "state": "live"},
+        ]
+    }
+    with patch.object(client, "_request", new_callable=AsyncMock, return_value=products):
+        await client.symbol_map.load()
+    assert client.symbol_map.delta_symbols == ["SOLUSD"]
+
+
+@pytest.mark.asyncio
+async def test_get_products_follows_pagination_cursor():
+    client = DeltaClient(api_key="k", api_secret="s", mode="testnet")
+    client._session = MagicMock()
+    pages = [
+        {"result": [{"id": 1, "symbol": "A"}], "meta": {"after": "cur1"}},
+        {"result": [{"id": 2, "symbol": "B"}], "meta": {"after": None}},
+    ]
+    with patch.object(client, "_request", new_callable=AsyncMock, side_effect=pages) as req:
+        resp = await client.get_products()
+    assert [p["symbol"] for p in resp["products"]] == ["A", "B"]
+    assert req.await_args_list[1].kwargs["params"] == {"after": "cur1"}
 
 
 # ---------------------------------------------------------------------------
@@ -306,57 +351,93 @@ async def test_symbol_map_hard_fails_on_missing_symbol():
 # ---------------------------------------------------------------------------
 
 
+def _text(payload) -> MagicMock:
+    msg = MagicMock()
+    msg.type = aiohttp.WSMsgType.TEXT
+    msg.data = json.dumps(payload)
+    return msg
+
+
+def _closed() -> MagicMock:
+    msg = MagicMock()
+    msg.type = aiohttp.WSMsgType.CLOSED
+    return msg
+
+
+AUTH_OK = {"type": "key-auth", "success": True, "status_code": 200, "status": "authenticated"}
+
+
+def test_testnet_socket_is_the_documented_private_endpoint():
+    assert DeltaClient(api_key="k", api_secret="s", mode="testnet").ws_url == (
+        "wss://socket-ind.testnet.deltaex.org"
+    )
+    assert DeltaClient(api_key="k", api_secret="s", mode="production").ws_url == (
+        "wss://socket.india.delta.exchange"
+    )
+
+
 @pytest.mark.asyncio
-async def test_ws_authenticate_message():
-    """Verify the WS auth message uses the correct signing path."""
+async def test_ws_key_auth_message_and_success_response():
+    """key-auth signs GET + timestamp + /live and waits for the auth response."""
     client = DeltaClient(api_key="ws_key", api_secret="ws_secret", mode="testnet")
     client._session = MagicMock()
-
-    ws_mock = AsyncMock()
-    ws_mock.send_json = AsyncMock()
-
+    ws = _FakeWSConnection([_text({"type": "heartbeat"}), _text(AUTH_OK)])
     ws_client = DeltaWebSocket(client, asyncio.Queue())
 
     with patch("signal_bot.delta.client.time.time", return_value=1609459200.0):
-        await ws_client._authenticate(ws_mock)
+        reply = await ws_client._authenticate(ws)
 
-    ws_mock.send_json.assert_awaited_once()
-    msg = ws_mock.send_json.await_args[0][0]
-    assert msg["type"] == "auth"
+    assert reply["success"] is True
+    msg = ws.sent[0]
+    assert msg["type"] == "key-auth"
     payload = msg["payload"]
     assert payload["api-key"] == "ws_key"
-    assert payload["timestamp"] == "1609459200"
+    assert payload["timestamp"] == 1609459200  # a number, per the docs
+    expected = hmac.new(b"ws_secret", f"GET1609459200{WS_AUTH_PATH}".encode(), hashlib.sha256)
+    assert WS_AUTH_PATH == "/live"
+    assert payload["signature"] == expected.hexdigest()
 
-    expected_path = WS_AUTH_PATH["testnet"]
-    expected_message = f"GET1609459200{expected_path}"
-    expected_sig = hmac.new(
-        b"ws_secret",
-        expected_message.encode(),
-        hashlib.sha256,
-    ).hexdigest()
-    assert payload["signature"] == expected_sig
+
+@pytest.mark.asyncio
+async def test_ws_key_auth_failure_raises_with_status():
+    client = DeltaClient(api_key="k", api_secret="s", mode="testnet")
+    client._session = MagicMock()
+    rejected = {
+        "type": "key-auth",
+        "success": False,
+        "status_code": 401,
+        "status": "invalid_signature",
+        "message": "Invalid Signature",
+    }
+    ws = _FakeWSConnection([_text(rejected)])
+    with pytest.raises(DeltaWebSocketAuthError, match="invalid_signature"):
+        await DeltaWebSocket(client, asyncio.Queue())._authenticate(ws)
 
 
 class _FakeWSConnection:
     """Async-context-manager stand-in for aiohttp.ClientWebSocketResponse."""
 
-    def __init__(self, messages):
-        self._messages = messages
-        self.send_json = AsyncMock()
+    def __init__(self, messages, hang_when_empty: bool = False):
+        self._messages = list(messages)
+        self.hang_when_empty = hang_when_empty
+        self.sent: list[dict] = []
+
+    async def send_json(self, payload):
+        self.sent.append(payload)
+
+    async def receive(self, timeout=None):
+        if self._messages:
+            return self._messages.pop(0)
+        if self.hang_when_empty:
+            await asyncio.sleep(timeout or 0)
+            raise TimeoutError
+        return _closed()
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
         pass
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._messages:
-            raise StopAsyncIteration
-        return self._messages.pop(0)
 
 
 @pytest.mark.asyncio
@@ -400,23 +481,18 @@ async def test_ws_reconnect_on_error():
 
 
 @pytest.mark.asyncio
-async def test_ws_puts_events_on_queue():
-    """Simulate a text message and verify it lands on the queue."""
+async def test_ws_subscribes_documented_channels_after_auth_and_emits_events():
     client = DeltaClient(api_key="k", api_secret="s", mode="testnet")
-
-    msg1 = MagicMock()
-    msg1.type = aiohttp.WSMsgType.TEXT
-    msg1.data = json.dumps({"type": "position", "channel": "private_positions", "data": {"x": 1}})
-
-    msg2 = MagicMock()
-    msg2.type = aiohttp.WSMsgType.TEXT
-    msg2.data = json.dumps({"type": "order", "channel": "private_orders", "data": {"y": 2}})
-
-    msg3 = MagicMock()
-    msg3.type = aiohttp.WSMsgType.CLOSED
-
-    fake_ws = _FakeWSConnection([msg1, msg2, msg3])
-
+    client.symbol_map._delta_to_binance = {"BTCUSD": "BTCUSDT", "ETHUSD": "ETHUSDT"}
+    fake_ws = _FakeWSConnection(
+        [
+            _text(AUTH_OK),
+            _text({"type": "subscriptions", "channels": []}),
+            _text({"type": "heartbeat"}),
+            _text({"type": "positions", "symbol": "BTCUSD", "size": 1}),
+            _text({"type": "orders", "symbol": "BTCUSD", "state": "open"}),
+        ]
+    )
     mock_session = MagicMock()
     mock_session.ws_connect = MagicMock(return_value=fake_ws)
     client._session = mock_session
@@ -424,16 +500,29 @@ async def test_ws_puts_events_on_queue():
     queue = asyncio.Queue()
     ws_client = DeltaWebSocket(client, queue)
     ws_client._running = True
+    await asyncio.wait_for(ws_client._connect_and_listen(), timeout=1.0)
 
-    with patch.object(ws_client, "_authenticate", new_callable=AsyncMock):
-        task = asyncio.create_task(ws_client._connect_and_listen())
-        await asyncio.wait_for(task, timeout=1.0)
+    types = [m["type"] for m in fake_ws.sent]
+    assert types == ["key-auth", "enable_heartbeat", "subscribe"]  # subscribe only after auth
+    channels = fake_ws.sent[2]["payload"]["channels"]
+    assert [c["name"] for c in channels] == ["orders", "positions", "user_trades"]
+    assert all(c["symbols"] == ["BTCUSD", "ETHUSD"] for c in channels)
+    # control messages (subscriptions, heartbeat) are not forwarded
+    assert [(await queue.get())["type"] for _ in range(queue.qsize())] == ["positions", "orders"]
 
-    assert queue.qsize() == 2
-    e1 = await queue.get()
-    assert e1["type"] == "position"
-    e2 = await queue.get()
-    assert e2["type"] == "order"
+
+@pytest.mark.asyncio
+async def test_ws_reconnects_when_heartbeats_stop():
+    client = DeltaClient(api_key="k", api_secret="s", mode="testnet")
+    client.symbol_map._delta_to_binance = {"BTCUSD": "BTCUSDT"}
+    fake_ws = _FakeWSConnection([_text(AUTH_OK)], hang_when_empty=True)
+    mock_session = MagicMock()
+    mock_session.ws_connect = MagicMock(return_value=fake_ws)
+    client._session = mock_session
+    ws_client = DeltaWebSocket(client, asyncio.Queue(), heartbeat_timeout=0.05)
+    ws_client._running = True
+    # returns (to reconnect) instead of hanging on a silent socket
+    await asyncio.wait_for(ws_client._connect_and_listen(), timeout=1.0)
 
 
 @pytest.mark.asyncio
@@ -441,10 +530,7 @@ async def test_ws_connect_sends_origin_header():
     """Regression: Delta India edge requires Origin header on WS handshake."""
     client = DeltaClient(api_key="k", api_secret="s", mode="testnet")
 
-    msg = MagicMock()
-    msg.type = aiohttp.WSMsgType.CLOSED
-
-    fake_ws = _FakeWSConnection([msg])
+    fake_ws = _FakeWSConnection([_text(AUTH_OK), _closed()])
 
     mock_session = MagicMock()
     mock_session.ws_connect = MagicMock(return_value=fake_ws)
@@ -454,9 +540,7 @@ async def test_ws_connect_sends_origin_header():
     ws_client = DeltaWebSocket(client, queue)
     ws_client._running = True
 
-    with patch.object(ws_client, "_authenticate", new_callable=AsyncMock):
-        task = asyncio.create_task(ws_client._connect_and_listen())
-        await asyncio.wait_for(task, timeout=1.0)
+    await asyncio.wait_for(ws_client._connect_and_listen(), timeout=1.0)
 
     mock_session.ws_connect.assert_called_once()
     _, kwargs = mock_session.ws_connect.call_args

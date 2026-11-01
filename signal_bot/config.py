@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     delta_api_key: str = ""
     delta_api_secret: str = ""
     delta_ws_origin: str = ""  # overridden by model_validator below
+    delta_ws_url: str = ""  # override the documented private socket for DELTA_MODE
+    delta_ws_auth_path: str = "/live"  # key-auth signs "GET" + timestamp + this path
 
     # Execution: "paper" (realistic simulated fills on live Delta books) or "live".
     # "dry_run" is accepted as a deprecated alias for "paper".

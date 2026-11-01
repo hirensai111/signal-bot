@@ -283,12 +283,15 @@ async def main() -> None:
 
     async with delta_client:  # loads Delta products (public) for symbol mapping
         delta_adapter = DeltaExchangeAdapter(delta_client)
+        # Symbols Delta doesn't list as live perpetuals are still ingested (features,
+        # research) but are not tradable; their signals are refused as symbol_unmapped.
+        tradable = [s for s in settings.symbols if s in delta_client.symbol_map._binance_to_delta]
         if live:
             adapter = delta_adapter
             mode = EXEC_MODE.LIVE
         else:
             adapter = PaperBroker(
-                {s: delta_adapter.instrument(s) for s in settings.symbols},
+                {s: delta_adapter.instrument(s) for s in tradable},
                 bus,
                 book_source=delta_adapter.order_book,
                 session_factory=AsyncSessionLocal,
@@ -376,6 +379,8 @@ async def main() -> None:
                 "dirty": code["dirty"],
                 "strategy": strategy,
                 "settings_fingerprint": settings.fingerprint(),
+                "tradable_symbols": tradable,
+                "not_on_delta": delta_client.symbol_map.missing,
             },
             governor=governor,
             bus=bus,

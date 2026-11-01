@@ -7,10 +7,11 @@ Responsibilities beyond plain REST calls:
 * normalise Delta REST and WebSocket payloads into venue-neutral objects and
   bus events with deterministic ids (so redelivered messages dedupe).
 
-Payload parsing is deliberately tolerant: it accepts both the documented v2
-socket shape (``{"type": "orders", ...fields}``) and the ``{"channel": ...,
-"data": {...}}`` shape used by earlier versions of this bot.  Field mappings
-marked ``VERIFY`` should be confirmed against Delta testnet before live use.
+Socket messages follow the documented private channels (``orders``,
+``positions``, ``user_trades`` / ``v2/user_trades``): flat update messages and
+``action: "snapshot"`` messages with a ``result`` list.  The legacy
+``{"channel": ..., "data": {...}}`` shape is still accepted.  Field mappings
+marked ``VERIFY`` need confirming with a real testnet fill before live use.
 """
 
 from __future__ import annotations
@@ -345,7 +346,8 @@ class DeltaExchangeAdapter:
         for row in _result(resp) or []:
             if str(row.get("order_id")) != order.exchange_order_id:
                 continue
-            out.append(parse_fill(row, client_order_id))
+            # Fills of the entry order itself: entries by definition.
+            out.append(replace(parse_fill(row, client_order_id), purpose=FillPurpose.ENTRY))
         return out
 
     async def exit_fills(
@@ -422,19 +424,40 @@ class DeltaExchangeAdapter:
         raise ExchangeUnavailable("no USD/USDT balance row in wallet response")
 
 
+def _fill_purpose(row: dict[str, Any]) -> FillPurpose:
+    """A fill message can't say whether it opened or closed our trade.
+
+    Liquidation/ADL are explicit; otherwise the purpose stays UNKNOWN and the order
+    store classifies it against the local order's side (same side = entry).
+    """
+    reason = str(row.get("reason") or row.get("R") or row.get("fill_type") or "").lower()
+    if reason in ("liquidation", "adl"):
+        return FillPurpose.LIQUIDATION
+    purpose = _purpose(row)
+    return FillPurpose.UNKNOWN if purpose == FillPurpose.ENTRY else purpose
+
+
 def parse_fill(row: dict[str, Any], client_order_id: str | None = None) -> ExchangeFill:
+    """Parse a fill from REST /v2/fills, the ``user_trades`` channel or ``v2/user_trades``.
+
+    v2/user_trades uses short keys: f=fill id, o=order id, c=client order id, S=side,
+    s=size, p=price, r=role, t=timestamp (µs), R=reason.  It carries no commission,
+    so ``c`` must never be read as a fee.
+    """
+    fill_id = row.get("fill_id") or row.get("f") or row.get("id")
+    role = str(row.get("role") or row.get("r") or "").lower()
     return ExchangeFill(
-        fill_id=f"delta:{row.get('id') or row.get('fill_id') or row.get('f')}",
-        client_order_id=client_order_id or row.get("client_order_id"),
+        fill_id=f"delta:{fill_id}",
+        client_order_id=client_order_id or row.get("client_order_id") or row.get("c") or None,
         exchange_order_id=str(row.get("order_id") or row.get("o") or "") or None,
         symbol=str(row.get("product_symbol") or row.get("symbol") or row.get("sy") or ""),
         side=str(row.get("side") or row.get("S") or "").lower(),
         qty=_dec(row.get("size") or row.get("s")),
         price=_dec(row.get("price") or row.get("p")),
-        fee=_dec(row.get("commission") or row.get("c")),
-        liquidity="maker" if str(row.get("role", "")).lower() == "maker" else "taker",
-        purpose=_purpose(row),
-        occurred_at=_ts(row.get("created_at") or row.get("timestamp")),
+        fee=_dec(row.get("commission")),
+        liquidity="maker" if role == "maker" else "taker",
+        purpose=_fill_purpose(row),
+        occurred_at=_ts(row.get("created_at") or row.get("timestamp") or row.get("t")),
     )
 
 
@@ -443,65 +466,90 @@ def parse_fill(row: dict[str, Any], client_order_id: str | None = None) -> Excha
 # ---------------------------------------------------------------------------
 
 
+ORDER_CHANNELS = ("orders", "private_orders")
+POSITION_CHANNELS = ("positions", "private_positions")
+FILL_CHANNELS = ("user_trades", "v2/user_trades", "fills")
+CONTROL_TYPES = ("heartbeat", "subscriptions", "key-auth", "unauth", "pong")
+
+
+def _items(msg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Updates are flat messages; snapshots carry a ``result`` list (action=snapshot)."""
+    if isinstance(msg.get("data"), dict):  # legacy {"channel": ..., "data": {...}} shape
+        return [msg["data"]]
+    if msg.get("action") == "snapshot" and isinstance(msg.get("result"), list):
+        symbol = msg.get("symbol")
+        return [{**row, "symbol": row.get("symbol") or symbol} for row in msg["result"]]
+    return [msg]
+
+
+def _order_event(raw: dict[str, Any]) -> Event | None:
+    order = parse_order(raw)
+    if not order.client_order_id:
+        return None
+    return Event.create(
+        EventType.EXCHANGE_ORDER_UPDATE,
+        order.to_payload(VENUE),
+        source=VENUE,
+        event_id=deterministic_event_id(
+            VENUE,
+            "order",
+            order.exchange_order_id,
+            order.state,
+            order.filled_size,
+            order.updated_at.isoformat(),
+        ),
+        occurred_at=order.updated_at,
+    )
+
+
+def _position_event(raw: dict[str, Any]) -> Event:
+    symbol = str(raw.get("product_symbol") or raw.get("symbol") or "")
+    pos = ExchangePosition(
+        symbol=symbol,
+        size=_dec(raw.get("size")),
+        entry_price=_dec(raw.get("entry_price")) if raw.get("entry_price") else None,
+        updated_at=_ts(raw.get("updated_at") or raw.get("timestamp")),
+        extra={"product_id": raw.get("product_id")},
+    )
+    payload = pos.to_payload(VENUE)
+    payload["product_id"] = raw.get("product_id")
+    return Event.create(
+        EventType.EXCHANGE_POSITION_UPDATE,
+        payload,
+        source=VENUE,
+        event_id=deterministic_event_id(VENUE, "position", symbol, pos.size, payload["updated_at"]),
+        occurred_at=pos.updated_at,
+    )
+
+
+def _fill_event(raw: dict[str, Any]) -> Event:
+    fill = parse_fill(raw)
+    return Event.create(
+        EventType.EXCHANGE_FILL,
+        fill.to_payload(VENUE),
+        source=VENUE,
+        event_id=deterministic_event_id(VENUE, "fill", fill.fill_id),
+        occurred_at=fill.occurred_at,
+    )
+
+
 def normalize_ws_message(msg: dict[str, Any]) -> list[Event]:
     """Translate one raw Delta socket message into zero or more bus events."""
+    if not isinstance(msg, dict):
+        return []
     channel = msg.get("channel") or msg.get("type") or ""
-    data = msg.get("data") if isinstance(msg.get("data"), dict) else msg
+    if channel in CONTROL_TYPES:
+        return []
     events: list[Event] = []
-
-    if channel in ("private_orders", "orders"):
-        order = parse_order(data)
-        if not order.client_order_id:
-            return events
-        events.append(
-            Event.create(
-                EventType.EXCHANGE_ORDER_UPDATE,
-                order.to_payload(VENUE),
-                source=VENUE,
-                event_id=deterministic_event_id(
-                    VENUE,
-                    "order",
-                    order.exchange_order_id,
-                    order.state,
-                    order.filled_size,
-                    order.updated_at.isoformat(),
-                ),
-                occurred_at=order.updated_at,
-            )
-        )
-    elif channel in ("private_positions", "positions"):
-        symbol = str(data.get("product_symbol") or data.get("symbol") or "")
-        pos = ExchangePosition(
-            symbol=symbol,
-            size=_dec(data.get("size")),
-            entry_price=_dec(data.get("entry_price")) if data.get("entry_price") else None,
-            updated_at=_ts(data.get("updated_at") or data.get("timestamp")),
-            extra={"product_id": data.get("product_id")},
-        )
-        payload = pos.to_payload(VENUE)
-        payload["product_id"] = data.get("product_id")
-        events.append(
-            Event.create(
-                EventType.EXCHANGE_POSITION_UPDATE,
-                payload,
-                source=VENUE,
-                event_id=deterministic_event_id(
-                    VENUE, "position", symbol, pos.size, payload["updated_at"]
-                ),
-                occurred_at=pos.updated_at,
-            )
-        )
-    elif channel in ("v2/user_trades", "user_trades", "fills"):
-        fill = parse_fill(data)
-        events.append(
-            Event.create(
-                EventType.EXCHANGE_FILL,
-                fill.to_payload(VENUE),
-                source=VENUE,
-                event_id=deterministic_event_id(VENUE, "fill", fill.fill_id),
-                occurred_at=fill.occurred_at,
-            )
-        )
+    for raw in _items(msg):
+        if channel in ORDER_CHANNELS:
+            event = _order_event(raw)
+            if event is not None:
+                events.append(event)
+        elif channel in POSITION_CHANNELS:
+            events.append(_position_event(raw))
+        elif channel in FILL_CHANNELS:
+            events.append(_fill_event(raw))
     return events
 
 

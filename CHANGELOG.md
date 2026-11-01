@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.1
+
+### Fixed (Delta Exchange India API alignment, per docs.delta.exchange)
+- Private WebSocket authentication uses `key-auth` (the old `auth` method was removed on 31 Oct 2026) and waits for the auth response before subscribing; failures report Delta's status (for example `invalid_signature`, `ip_not_whitelisted`).
+- Testnet private socket is the documented `wss://socket-ind.testnet.deltaex.org`.
+- Subscribes to the documented private channels `orders`, `positions` and `user_trades` with explicit symbols; enables the server heartbeat and reconnects after 35 s of silence.
+- Fill parsing handles both `user_trades` and `v2/user_trades`; `"c"` (client order id) is no longer read as the commission. Fills that don't say whether they opened or closed a trade are classified against the local order's side.
+- Snapshot messages (`action: "snapshot"`) are normalised row by row.
+- Products: follows the cursor pagination and maps only live perpetual futures; symbols Delta doesn't list are reported and refused instead of aborting startup.
+- Delta cancels include the product id.
+
+### Added
+- `python -m signal_bot.delta.client --ws-check`: a read-only socket probe (authenticate, subscribe, print messages; places no orders).
+
 ## 2.0.0
 
 Signal Bot 2.0: from a signal bot to a fault-tolerant trading platform.

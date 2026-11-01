@@ -56,6 +56,17 @@ _LIFECYCLE_RANK = {
 }
 
 
+def classify_fill(fill: ExchangeFill, order: Order | None) -> FillPurpose:
+    """Resolve an UNKNOWN fill against our order: same side opens, opposite side closes.
+
+    Venue streams (e.g. Delta's user_trades) don't say whether a fill opened or closed
+    a position; the local order does.  Explicit purposes are kept as reported.
+    """
+    if fill.purpose != FillPurpose.UNKNOWN or order is None:
+        return fill.purpose
+    return FillPurpose.ENTRY if fill.side == order.side else FillPurpose.UNKNOWN
+
+
 def local_event_id(client_order_id: str, *parts: Any) -> str:
     """Deterministic id for locally-initiated transitions (retries stay idempotent)."""
     return deterministic_event_id("local", client_order_id, *parts)
@@ -367,6 +378,7 @@ class OrderStore:
                 order = await session.scalar(
                     select(Order).where(Order.client_order_id == fill.client_order_id)
                 )
+            purpose = classify_fill(fill, order)
             session.add(
                 Fill(
                     fill_id=fill.fill_id,
@@ -375,7 +387,7 @@ class OrderStore:
                     venue=venue,
                     symbol=fill.symbol,
                     side=fill.side,
-                    purpose=str(fill.purpose),
+                    purpose=str(purpose),
                     qty=fill.qty,
                     price=fill.price,
                     fee=fill.fee,
@@ -383,7 +395,7 @@ class OrderStore:
                     occurred_at=fill.occurred_at,
                 )
             )
-            if order is not None and fill.purpose == FillPurpose.ENTRY:
+            if order is not None and purpose == FillPurpose.ENTRY:
                 order.fees = (order.fees or 0) + fill.fee
                 sig = await session.get(Signal, order.signal_id)
                 if sig is not None:

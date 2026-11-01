@@ -465,6 +465,7 @@ td.r, th.r { text-align: right; }
       e.venue && `Venue ${e.venue}${e.delta_mode ? " " + e.delta_mode : ""}`,
       e.strategy && `Strategy ${e.strategy.name} v${e.strategy.version}`,
       commit && `Commit ${commit}`,
+      e.not_on_delta && e.not_on_delta.length && `Not tradable on this venue: ${e.not_on_delta.map((m) => String(m).split(" ")[0]).join(", ")}`,
       s.uptime_seconds != null && `Up ${Math.floor(s.uptime_seconds / 3600)}h ${Math.floor((s.uptime_seconds % 3600) / 60)}m`,
     ].filter(Boolean).forEach((t) => meta.appendChild(el("span", t)));
     meta.appendChild(el("span", "Updated " + new Date().toLocaleTimeString(), { id: "updated" }));

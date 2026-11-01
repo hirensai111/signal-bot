@@ -17,10 +17,11 @@ from signal_bot.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Private-channel socket endpoints as documented at docs.delta.exchange ("Websocket Feed").
 ENDPOINTS = {
     "testnet": {
         "rest": "https://cdn-ind.testnet.deltaex.org",
-        "ws": "wss://socketv2-ind-elb.testnet.deltaex.org",
+        "ws": "wss://socket-ind.testnet.deltaex.org",
     },
     "production": {
         "rest": "https://api.india.delta.exchange",
@@ -28,7 +29,13 @@ ENDPOINTS = {
     },
 }
 
-WS_AUTH_PATH = {"testnet": "/testnet", "production": "/live"}
+# key-auth signs "GET" + timestamp + path; the docs give "/live" for every environment.
+WS_AUTH_PATH = "/live"
+# Private channels for order lifecycle, positions and fills (each needs a symbols list).
+PRIVATE_CHANNELS = ("orders", "positions", "user_trades")
+# The server sends a heartbeat every 30 s once enabled; reconnect after 35 s of silence.
+WS_HEARTBEAT_TIMEOUT = 35.0
+WS_AUTH_TIMEOUT = 10.0
 
 WATCHED_BINANCE_SYMBOLS: list[str] = settings.symbols
 
@@ -42,15 +49,27 @@ class DeltaSymbolMap:
         self._binance_to_delta: dict[str, str] = {}
         self._delta_to_binance: dict[str, str] = {}
         self._product_id_to_binance: dict[int, str] = {}
+        self.missing: list[str] = []
 
-    async def load(self) -> None:
-        """Fetch products from Delta and build lookup tables."""
+    async def load(self, strict: bool = False) -> None:
+        """Fetch products and map watched Binance symbols to live Delta perpetuals.
+
+        Only ``perpetual_futures`` in state ``live`` are considered, so an expired or
+        non-perpetual product that happens to share a symbol is never traded.  Symbols
+        Delta does not list (e.g. LINKUSD/AVAXUSD on testnet) are reported in
+        :attr:`missing` and left untradeable; startup fails only if *none* map, or if
+        ``strict`` is set.
+        """
         raw = await self.client.get_products()
         products = raw.get("products", []) if isinstance(raw, dict) else raw
 
         for p in products:
             delta_sym = p.get("symbol", "")
             if not delta_sym:
+                continue
+            if p.get("contract_type", "perpetual_futures") != "perpetual_futures":
+                continue
+            if p.get("state", "live") != "live":
                 continue
             self._products[delta_sym] = p
 
@@ -68,16 +87,18 @@ class DeltaSymbolMap:
                 missing.append(f"{binance_sym} → {delta_sym}")
                 logger.error("Symbol %s not found on Delta India as %s", binance_sym, delta_sym)
 
+        self.missing = missing
         if missing:
             logger.error(
-                "Missing %d tradable symbol(s) on Delta India: %s",
-                len(missing),
+                "Not tradable on Delta (%s): %s. Signals for these symbols will be refused.",
+                self.client.mode,
                 missing,
             )
-            raise RuntimeError(
-                f"Symbols not available on Delta India: {missing}. "
-                "Update WATCHED_BINANCE_SYMBOLS or check exchange listings."
-            )
+            if strict or not self._binance_to_delta:
+                raise RuntimeError(
+                    f"Symbols not available on Delta India: {missing}. "
+                    "Update SYMBOLS or check exchange listings."
+                )
 
         logger.info(
             "DeltaSymbolMap loaded %d products; mapped %d/%d symbols",
@@ -105,6 +126,11 @@ class DeltaSymbolMap:
 
     def resolve_by_product_id(self, product_id: int) -> str | None:
         return self._product_id_to_binance.get(product_id)
+
+    @property
+    def delta_symbols(self) -> list[str]:
+        """Venue symbols of every mapped (tradable) watched instrument."""
+        return sorted(self._delta_to_binance)
 
 
 # ---------------------------------------------------------------------------
@@ -253,14 +279,24 @@ class DeltaClient:
         return await self._request("GET", f"/v2/l2orderbook/{symbol}")
 
     async def get_products(self) -> dict:
-        """Fetch all products.  Result cached in memory on first call."""
+        """Fetch all products, following the cursor pagination.  Cached after the first call."""
         if self._products_cache is not None:
             return {"products": self._products_cache}
-        resp = await self._request("GET", "/v2/products")
-        if isinstance(resp, dict):
-            self._products_cache = resp.get("products") or resp.get("result") or []
-        else:
-            self._products_cache = resp
+        products: list = []
+        after = None
+        for _ in range(50):  # hard page cap: the endpoint returns up to 3000 per page today
+            resp = await self._request(
+                "GET", "/v2/products", params={"after": after} if after else None
+            )
+            if isinstance(resp, dict):
+                products.extend(resp.get("products") or resp.get("result") or [])
+                after = (resp.get("meta") or {}).get("after")
+            else:
+                products.extend(resp or [])
+                after = None
+            if not after:
+                break
+        self._products_cache = products
         return {"products": self._products_cache}
 
     # ------------------------------------------------------------------
@@ -481,6 +517,10 @@ class DeltaWebSocket:
         on_connect=None,
         on_disconnect=None,
         heartbeat: float = 20.0,
+        symbols: list[str] | None = None,
+        heartbeat_timeout: float = WS_HEARTBEAT_TIMEOUT,
+        ws_url: str | None = None,
+        auth_path: str | None = None,
     ):
         """*delta_events* is an ``asyncio.Queue`` (raw messages) or an async callable.
 
@@ -493,7 +533,11 @@ class DeltaWebSocket:
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
         self.heartbeat = heartbeat
-        self._ws_url = client.ws_url
+        self.symbols = symbols
+        self.heartbeat_timeout = heartbeat_timeout
+        self.auth_path = auth_path or settings.delta_ws_auth_path or WS_AUTH_PATH
+        self._ws_url = ws_url or settings.delta_ws_url or client.ws_url
+        self.last_auth_response: dict | None = None
         self._running = False
         self._task: asyncio.Task | None = None
         self.connected = False
@@ -529,6 +573,19 @@ class DeltaWebSocket:
                 backoff = 1.0
             except asyncio.CancelledError:
                 raise
+            except DeltaWebSocketAuthError as exc:
+                # Credentials/signature problems won't fix themselves quickly; don't hammer
+                # the endpoint (150 connections per 5 minutes per IP).
+                logger.error("Delta WS authentication failed: %s", exc)
+                await self._mark_disconnected(f"auth_failed: {exc}")
+                backoff = max(backoff * 2, 60.0)
+                await asyncio.sleep(min(backoff, 300.0))
+            except aiohttp.WSServerHandshakeError as exc:
+                logger.error("Delta WS handshake rejected (HTTP %s)", exc.status)
+                await self._mark_disconnected(f"handshake_{exc.status}")
+                # Delta asks clients that hit the connection limit (429) to wait 5-10 minutes.
+                await asyncio.sleep(300.0 if exc.status == 429 else backoff)
+                backoff = min(backoff * 2, 60.0)
             except Exception as exc:
                 logger.exception("Delta WS error. Reconnecting in %.0fs…", backoff)
                 await self._mark_disconnected(f"error: {type(exc).__name__}")
@@ -559,6 +616,16 @@ class DeltaWebSocket:
             except Exception:
                 logger.exception("on_disconnect callback failed")
 
+    def subscription_message(self) -> dict:
+        """Subscribe the private channels for every tradable symbol (explicit symbols get snapshots)."""
+        symbols = self.symbols or self.client.symbol_map.delta_symbols or ["all"]
+        return {
+            "type": "subscribe",
+            "payload": {
+                "channels": [{"name": name, "symbols": list(symbols)} for name in PRIVATE_CHANNELS]
+            },
+        }
+
     async def _connect_and_listen(self) -> None:
         session = self.client._session
         if session is None:
@@ -571,16 +638,16 @@ class DeltaWebSocket:
         async with session.ws_connect(
             self._ws_url, headers=headers, heartbeat=self.heartbeat
         ) as ws:
+            # Private channels may only be subscribed after key-auth has succeeded.
             await self._authenticate(ws)
-            await ws.send_json(
-                {
-                    "type": "subscribe",
-                    "payload": {
-                        "channels": ["private_positions", "private_orders"],
-                    },
-                }
+            await ws.send_json({"type": "enable_heartbeat"})
+            subscription = self.subscription_message()
+            await ws.send_json(subscription)
+            logger.info(
+                "Delta WS authenticated; subscribed %s for %s",
+                [c["name"] for c in subscription["payload"]["channels"]],
+                subscription["payload"]["channels"][0]["symbols"],
             )
-            logger.info("Delta WS subscribed to private_positions + private_orders")
             self.connected = True
             if self.on_connect is not None:
                 try:
@@ -588,8 +655,14 @@ class DeltaWebSocket:
                 except Exception:
                     logger.exception("on_connect callback failed")
 
-            async for msg in ws:
-                if not self._running:
+            while self._running:
+                try:
+                    msg = await ws.receive(timeout=self.heartbeat_timeout)
+                except TimeoutError:
+                    logger.warning(
+                        "Delta WS silent for %.0fs (no heartbeat); reconnecting",
+                        self.heartbeat_timeout,
+                    )
                     break
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
@@ -597,31 +670,74 @@ class DeltaWebSocket:
                     except json.JSONDecodeError:
                         logger.warning("Delta WS non-JSON: %s", msg.data[:200])
                         continue
+                    kind = event.get("type") if isinstance(event, dict) else None
+                    if kind == "heartbeat":
+                        continue
+                    if kind == "subscriptions":
+                        level = (
+                            logging.ERROR if "error" in json.dumps(event).lower() else logging.INFO
+                        )
+                        logger.log(level, "Delta WS subscriptions: %s", str(event)[:500])
+                        continue
                     await self._emit(event)
-                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                elif msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.ERROR,
+                ):
                     logger.warning("Delta WS closed / error")
                     break
 
-    async def _authenticate(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        path = WS_AUTH_PATH.get(self.client.mode, "/live")
-        timestamp = str(int(time.time()))
-        message = "GET" + timestamp + path
+    def auth_message(self, timestamp: int | None = None) -> dict:
+        """Build the documented key-auth request: sign "GET" + timestamp + "/live"."""
+        timestamp = int(time.time()) if timestamp is None else int(timestamp)
         signature = hmac.new(
             self.client.api_secret.encode("utf-8"),
-            message.encode("utf-8"),
+            f"GET{timestamp}{self.auth_path}".encode(),
             hashlib.sha256,
         ).hexdigest()
-        await ws.send_json(
-            {
-                "type": "auth",
-                "payload": {
-                    "api-key": self.client.api_key,
-                    "signature": signature,
-                    "timestamp": timestamp,
-                },
-            }
-        )
-        logger.debug("Delta WS auth sent")
+        return {
+            "type": "key-auth",
+            "payload": {
+                "api-key": self.client.api_key,
+                "signature": signature,
+                "timestamp": timestamp,  # documented as a number, in seconds
+            },
+        }
+
+    async def _authenticate(self, ws: aiohttp.ClientWebSocketResponse) -> dict:
+        """Send key-auth and wait for its response; raise on failure or silence."""
+        await ws.send_json(self.auth_message())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + WS_AUTH_TIMEOUT
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise DeltaWebSocketAuthError("no key-auth response within 10s")
+            try:
+                msg = await ws.receive(timeout=remaining)
+            except TimeoutError as exc:
+                raise DeltaWebSocketAuthError("no key-auth response within 10s") from exc
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                raise DeltaWebSocketAuthError(f"socket closed during auth ({msg.type})")
+            try:
+                reply = json.loads(msg.data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(reply, dict) or reply.get("type") != "key-auth":
+                continue
+            self.last_auth_response = reply
+            if reply.get("success") is True:
+                logger.info("Delta WS key-auth succeeded (%s)", reply.get("status"))
+                return reply
+            raise DeltaWebSocketAuthError(
+                f"{reply.get('status_code')} {reply.get('status')}: {reply.get('message')}"
+            )
+
+
+class DeltaWebSocketAuthError(Exception):
+    """key-auth was rejected (bad key/signature, expired timestamp, IP not whitelisted)."""
 
 
 # ---------------------------------------------------------------------------
@@ -662,13 +778,60 @@ async def _cli_check() -> None:
     logger.info("OK")
 
 
+async def _cli_ws_check(seconds: float) -> int:
+    """Read-only probe: connect, key-auth, subscribe, print what arrives.  Places no orders."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    received: list[dict] = []
+
+    async def sink(event: dict) -> None:
+        received.append(event)
+        print(json.dumps(event)[:300])
+
+    async with DeltaClient() as client:
+        ws = DeltaWebSocket(client, sink)
+        print(f"mode={client.mode} url={ws._ws_url} auth_path={ws.auth_path}")
+        print(
+            f"tradable={client.symbol_map.delta_symbols} not_on_delta={client.symbol_map.missing}"
+        )
+        print("subscribe:", json.dumps(ws.subscription_message()))
+        ws._running = True
+        task = asyncio.create_task(ws._connect_and_listen())
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=seconds)
+        except TimeoutError:
+            pass
+        except DeltaWebSocketAuthError as exc:
+            print(f"AUTH FAILED: {exc}")
+            return 2
+        finally:
+            ws._running = False
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if ws.last_auth_response is None:
+            print("no key-auth response received")
+            return 2
+        print(f"auth={ws.last_auth_response} connected={ws.connected} events={len(received)}")
+        return 0 if ws.last_auth_response.get("success") else 2
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Delta Exchange India client sanity check")
     parser.add_argument("--check", action="store_true", help="Connect and print basic account info")
+    parser.add_argument(
+        "--ws-check",
+        action="store_true",
+        help="Authenticate the private socket and subscribe (read-only; places no orders)",
+    )
+    parser.add_argument("--seconds", type=float, default=20.0, help="How long --ws-check listens")
     args = parser.parse_args()
 
     if args.check:
         asyncio.run(_cli_check())
+    elif args.ws_check:
+        raise SystemExit(asyncio.run(_cli_ws_check(args.seconds)))
     else:
         parser.print_help()
 

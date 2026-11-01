@@ -12,10 +12,24 @@
 1. CI is green on the exact commit you will deploy; record the commit and the strategy `config_hash`.
 2. The strategy's latest research report says **Validated candidate**. A *Not validated* strategy does not go live.
 3. Paper trading for at least 2 weeks with a session report (`signal-bot-research session-report`) showing no unresolved discrepancies, no protective failures and an execution drag in line with research.
-4. On Delta **testnet** with `EXEC_MODE=live`, confirm every `VERIFY` mapping in `execution/delta_adapter.py`: the order-update and position socket payloads, the bracket-leg fields on positions, `GET /v2/orders/client_order_id/{id}`, `POST /v2/orders/bracket`, and that `client_order_id` accepts 32 characters.
+4. On Delta **testnet**, run the read-only socket probe with your testnet key: `DELTA_MODE=testnet python -m signal_bot.delta.client --ws-check`. It must print `auth={... "success": true ...}` and a `subscriptions` line without errors. It places no orders. Then, with `EXEC_MODE=live` and a tiny position, confirm the remaining `VERIFY` mappings in `execution/delta_adapter.py`: order, position and `user_trades` messages for a real fill (including whether bracket child fills carry your `client_order_id`), the bracket-leg fields on positions, `GET /v2/orders/client_order_id/{id}`, `POST /v2/orders/bracket`, and cancel with `product_id`.
 5. Run the halt drill below on testnet.
 6. Set `OPERATOR_TOKEN`, keep the ops port on localhost or behind an authenticated proxy, and make sure Telegram alerts arrive.
 7. Start with `RISK_PCT_PER_TRADE` at 0.25 or less and `MAX_CONCURRENT_POSITIONS=1`.
+
+## Delta private socket (as documented at docs.delta.exchange)
+
+| Item | Value |
+|---|---|
+| Testnet / production private socket | `wss://socket-ind.testnet.deltaex.org` / `wss://socket.india.delta.exchange` (override with `DELTA_WS_URL`) |
+| Authentication | `{"type":"key-auth","payload":{"api-key","signature","timestamp"}}`; the signature is HMAC-SHA256 of `"GET" + timestamp + "/live"` (`DELTA_WS_AUTH_PATH`). The old `auth` type was removed on 31 Oct 2026. |
+| Order of operations | key-auth, wait for `{"type":"key-auth","success":true}`, `enable_heartbeat`, then subscribe |
+| Channels | `orders`, `positions`, `user_trades`, each with the tradable symbols (explicit symbols get snapshots) |
+| Liveness | server heartbeat every 30 s; the bot reconnects after 35 s of silence |
+| Confirmed against testnet without credentials | endpoint reachable; `key-auth` answered with the documented response shape (`api_key_not_found`); the legacy `auth` type returns only `{"type":"error"}` |
+| Not yet confirmed (needs a testnet key) | signature acceptance, subscription response, real order/position/fill payloads |
+
+Symbols Delta doesn't list as live perpetuals (testnet has no LINKUSD or AVAXUSD) are logged at startup, shown in the control room as not tradable, and their signals are refused with `symbol_unmapped`. Startup fails only if none of `SYMBOLS` is tradable.
 
 ## Halting and resuming
 

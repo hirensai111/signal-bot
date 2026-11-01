@@ -443,7 +443,8 @@ class ExecutionEngine:
             await self._apply_update(update, event_id=event.event_id)
         elif etype == EventType.EXCHANGE_FILL:
             fill = fill_from_payload(event.payload)
-            if fill.purpose == FillPurpose.ENTRY:
+            # UNKNOWN fills are classified by the store (same side as our order = entry).
+            if fill.purpose in (FillPurpose.ENTRY, FillPurpose.UNKNOWN):
                 await self.store.record_fill(fill, event.payload.get("venue", self.adapter.venue))
         elif etype == EventType.STREAM_DISCONNECTED:
             self.governor.set_breaker(
