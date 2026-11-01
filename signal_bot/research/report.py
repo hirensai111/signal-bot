@@ -265,7 +265,28 @@ def render_html(report: dict[str, Any]) -> str:
             )
     parts.append(
         "</tbody></table><p class=note>Signal R measures the idea at its intended levels; expectancy is what the "
-        "account realised after execution. The gap between them is execution cost.</p></div>"
+        "account realised after execution. The gap between them is execution cost.</p>"
+    )
+    parts.append(
+        "<h3>Is the edge distinguishable from zero?</h3><table><thead><tr><th>Symbol</th>"
+        "<th class=r>Trades</th><th class=r>Signal R, 95% interval</th><th class=r>t-statistic</th>"
+        "<th class=r>Realised R, 95% interval</th></tr></thead><tbody>"
+    )
+
+    def interval(ci):
+        return f"{num(ci[0], 3, True)} to {num(ci[1], 3, True)}" if ci else "–"
+
+    for r in results:
+        p = r["performance"]["full"]
+        parts.append(
+            f"<tr><td>{esc(r['symbol'])}</td><td class=r>{esc(p['trades'])}</td>"
+            f"<td class=r>{interval(p.get('signal_expectancy_r_ci95'))}</td>"
+            f"<td class=r>{num(p.get('signal_expectancy_t_stat'), 2)}</td>"
+            f"<td class=r>{interval(p.get('expectancy_r_ci95'))}</td></tr>"
+        )
+    parts.append(
+        "</tbody></table><p class=note>An interval that spans zero means this sample cannot tell the edge "
+        "apart from luck; roughly |t| &gt; 2 is needed before an edge is worth paying costs for.</p></div>"
     )
 
     parts.append(
@@ -414,6 +435,18 @@ def render_html(report: dict[str, Any]) -> str:
         )
     parts.append("</tbody></table></div>")
 
+    parts.append(
+        "<h2>Limitations</h2><div class=panel><ul>"
+        "<li>Prices and volumes are Binance USD-M futures; live execution is on Delta Exchange India, whose "
+        "basis, depth and fees differ. The paper broker measures that gap on live Delta books.</li>"
+        "<li>Fees assume a 5 bps taker and 2 bps maker schedule and a constant funding rate; real funding "
+        "varies and can be large in trends.</li>"
+        "<li>Bars hide the order of the high and low: when a stop and a target fall in the same bar the stop "
+        "is assumed first, which understates results for wide-range bars.</li>"
+        "<li>One 12-month period. The out-of-sample window is its last third, so it covers a single regime.</li>"
+        "<li>One position per symbol at a time, as in live trading: signals arriving while a position is open "
+        "are skipped.</li></ul></div>"
+    )
     c = report["costs"]
     parts.append(
         "<h2>Assumptions and provenance</h2><div class=panel><table><tbody>"

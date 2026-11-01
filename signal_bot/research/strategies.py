@@ -228,7 +228,11 @@ class RegimeFilter:
 @dataclass
 class LiquiditySweepBaseline:
     timeframe: str = "5m"
-    hold_multiple: int = 3  # live outcome window: est_hold_minutes * 3
+    # The live engine has no time stop: positions run until their SL/TP fill.  Research
+    # mirrors that (capped at 7 days so a run always terminates).  Set hold_multiple to
+    # study a time stop at est_hold_minutes * hold_multiple instead.
+    hold_multiple: int | None = None
+    max_hold_days: int = 7
     cache_dir: str = "data/cache"
     name: str = "liquidity_sweep"
     version: str = "1.0.0"
@@ -243,7 +247,11 @@ class LiquiditySweepBaseline:
             "min_rr": str(SweepDetector.MIN_RR),
             "vol_zscore_min": 2.0,
             "vol_ratio_min": 2.5,
-            "hold_multiple": self.hold_multiple,
+            "time_stop": (
+                f"est_hold_minutes x {self.hold_multiple}"
+                if self.hold_multiple
+                else f"none (live behaviour; {self.max_hold_days}d cap)"
+            ),
             "implementation": "live modules replayed (signal_bot.backtest.runner)",
         }
 
@@ -253,11 +261,11 @@ class LiquiditySweepBaseline:
         f = frame_for(data, self.timeframe)
         signals = self._cached_signals(data)
         pos = {ts: i for i, ts in enumerate(f.index)}
-        hold_bars = (
-            {"1m": 30, "5m": 120}[self.timeframe]
-            * self.hold_multiple
-            // INTERVAL_MINUTES[self.timeframe]
-        )
+        if self.hold_multiple:
+            hold_minutes = {"1m": 30, "5m": 120}[self.timeframe] * self.hold_multiple
+        else:
+            hold_minutes = self.max_hold_days * 24 * 60
+        hold_bars = hold_minutes // INTERVAL_MINUTES[self.timeframe]
         out = []
         for s in signals:
             i = pos.get(pd.Timestamp(s["open_time"]))

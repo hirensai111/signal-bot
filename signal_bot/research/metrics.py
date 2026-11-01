@@ -17,6 +17,21 @@ def _round(x: float, n: int = 4) -> float | None:
     return round(float(x), n)
 
 
+def _ci(values: list[float]) -> list[float] | None:
+    """Normal-approximation 95% interval for a mean of per-trade R."""
+    if len(values) < 10:
+        return None
+    m, se = float(np.mean(values)), float(np.std(values, ddof=1) / math.sqrt(len(values)))
+    return [_round(m - 1.96 * se), _round(m + 1.96 * se)]
+
+
+def _t(values: list[float]) -> float | None:
+    if len(values) < 10:
+        return None
+    sd = float(np.std(values, ddof=1))
+    return _round(float(np.mean(values)) / (sd / math.sqrt(len(values))), 2) if sd > 0 else None
+
+
 def max_drawdown(
     equity: pd.Series,
 ) -> tuple[float, float, pd.Timestamp | None, pd.Timestamp | None]:
@@ -74,6 +89,9 @@ def performance(trades: list[Trade], equity: pd.Series, initial: float) -> dict[
         "expectancy_r": _round(float(np.mean([t.realized_r for t in filled])) if n else None),
         "expectancy_usd": _round(float(np.mean([t.net_pnl for t in filled])) if n else None, 2),
         "signal_expectancy_r": _round(float(np.mean([t.signal_r for t in filled])) if n else None),
+        "expectancy_r_ci95": _ci([t.realized_r for t in filled]),
+        "signal_expectancy_r_ci95": _ci([t.signal_r for t in filled]),
+        "signal_expectancy_t_stat": _t([t.signal_r for t in filled]),
         "profit_factor": _round(gross_win / gross_loss) if gross_loss > 0 else None,
         "max_drawdown_pct": _round(dd),
         "longest_drawdown_days": _round(dd_days, 2),
