@@ -47,6 +47,8 @@ Deterministic and price/liquidity-informed. This replaces the old
 * A stop is a stop-market order: it fills at the open if the bar gaps through it, then pays spread, impact and the taker fee.
 * A target is a resting limit: it fills at its price (maker fee), or at the open if the bar gaps through it.
 * If stop and target are both touched in one bar, the stop is assumed first.
+* A trailing stop keeps a constant distance from the best price reached on earlier
+  bars and never loosens. It is checked like any other stop, so a gap fills at the open.
 * Funding is charged per 8h boundary; a time stop applies after `max_hold_bars`.
 
 Each trade records **signal R** (the idea at its intended levels) and **realised R**
@@ -75,6 +77,8 @@ the 95th percentile of random entries on every symbol.
 | `liquidity_sweep.toml` | The production strategy. It is *not* re-implemented: `backtest/runner.py:replay_live_signals` feeds candles through the live HTF scanner, microstructure engine, sweep detector and risk sizer, so research and production cannot drift apart. |
 | `exhaustion_reversion.toml` | Fades climactic runs (N same-direction bars covering k×ATR with a volume spike), gated by the no-trade regime filter. |
 | `exhaustion_reversion_unfiltered.toml` | The same without the filter, to measure what the filter contributes. |
+| `trend_breakout.toml` | 4h Donchian breakout in the direction of the 200-bar EMA, on above-average volume, with a 2 ATR initial stop and a 3 ATR constant-distance trailing stop (what Delta's `bracket_trail_amount` does) and no fixed target. |
+| `liquidity_sweep_v2.toml` | The production sweep entries and stops, skipping stops under 40 bps and replacing the far HTF target with a fixed R target or a trailing exit. |
 
 The **no-trade regime filter** (`RegimeFilter`) wraps any strategy and vetoes trades
 when volatility is in its bottom 20% (costs dominate), top 3% (disorderly), or when
