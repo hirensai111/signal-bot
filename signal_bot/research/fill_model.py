@@ -76,6 +76,12 @@ class Intent:
     take_profit: float
     max_hold_bars: int = 48
     tag: str = ""
+    # Constant-distance trailing stop in price units (Delta's bracket_trail_amount):
+    # the stop follows the best price since entry at this distance and never loosens.
+    trail_distance: float | None = None
+
+
+NO_TARGET = float("inf")  # take_profit for a long with no fixed target (use -inf for shorts)
 
 
 @dataclass
@@ -104,6 +110,7 @@ class Trade:
     realized_r: float = 0.0
     equity_after: float = 0.0
     tag: str = ""
+    trail_distance: float | None = None
     filled: bool = False
     partial: bool = False
     extra: dict = field(default_factory=dict)
@@ -159,6 +166,7 @@ def simulate(
             stop=it.stop,
             take_profit=it.take_profit,
             tag=it.tag,
+            trail_distance=it.trail_distance,
         )
         if risk_per_unit <= 0:
             trade.exit_reason = "invalid"
@@ -202,15 +210,23 @@ def simulate(
         k = j
         last = min(n - 1, j + it.max_hold_bars)
         funding = 0.0
+        stop = it.stop
+        best = o[j]  # most favourable price seen since entry (through the previous bar)
         while k <= last:
             if k > j and _crosses_funding(idx[k - 1], idx[k]):
                 funding -= sign * fill_qty * o[k] * cost.funding_rate_8h
-            stop_hit = (lo[k] <= it.stop) if long else (h[k] >= it.stop)
+            if it.trail_distance and k > j:
+                # Trail updated per bar from extremes through bar k-1 (causal approximation
+                # of an exchange trailing stop).
+                best = max(best, h[k - 1]) if long else min(best, lo[k - 1])
+                trailed = best - it.trail_distance if long else best + it.trail_distance
+                stop = max(stop, trailed) if long else min(stop, trailed)
+            stop_hit = (lo[k] <= stop) if long else (h[k] >= stop)
             tp_hit = (h[k] >= it.take_profit) if long else (lo[k] <= it.take_profit)
             if stop_hit:
-                gap = (o[k] <= it.stop) if long else (o[k] >= it.stop)
-                base = o[k] if (gap and k > j) else it.stop
-                if k == j and ((long and o[k] <= it.stop) or (not long and o[k] >= it.stop)):
+                gap = (o[k] <= stop) if long else (o[k] >= stop)
+                base = o[k] if (gap and k > j) else stop
+                if k == j and ((long and o[k] <= stop) or (not long and o[k] >= stop)):
                     base = o[k]
                 sp = cost.half_spread_bps / 1e4 * base
                 im = _impact_bps(cost, fill_qty * base, qv[k], rng_bps[k]) / 1e4 * base
@@ -218,7 +234,7 @@ def simulate(
                 fees += exit_px * fill_qty * cost.taker_fee
                 spread_cost += sp * fill_qty
                 impact_cost += im * fill_qty
-                reason = "sl"
+                reason = "trail" if stop != it.stop else "sl"
                 break
             if tp_hit:
                 through = (o[k] >= it.take_profit) if long else (o[k] <= it.take_profit)
@@ -241,7 +257,7 @@ def simulate(
         equity_before = equity
         gross = sign * (exit_px - entry_px) * fill_qty
         net = gross - fees + funding
-        level = it.stop if reason == "sl" else it.take_profit if reason == "tp" else c[k]
+        level = stop if reason in ("sl", "trail") else it.take_profit if reason == "tp" else c[k]
         trade.exit_time = idx[k]
         trade.exit_price = exit_px
         trade.exit_reason = reason

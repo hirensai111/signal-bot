@@ -23,7 +23,7 @@ import pandas as pd
 from signal_bot.provenance import provenance
 from signal_bot.research import metrics as M
 from signal_bot.research.data import Dataset
-from signal_bot.research.fill_model import CostModel, Intent, Sizing, Trade, simulate
+from signal_bot.research.fill_model import NO_TARGET, CostModel, Intent, Sizing, Trade, simulate
 from signal_bot.research.strategies import build, frame_for
 
 logger = logging.getLogger(__name__)
@@ -97,16 +97,28 @@ def _buy_hold(frame: pd.DataFrame, start=None, end=None) -> float:
     return round(float(f["close"].iloc[-1] / f["open"].iloc[0] - 1) * 100, 4)
 
 
-def _random_baseline(frame, trades: list[Trade], cost, sizing, symbol, runs: int, seed: int):
+def _random_baseline(
+    frame, trades: list[Trade], cost, sizing, symbol, runs: int, seed: int, first_bar: int = 0
+):
     filled = [t for t in trades if t.filled]
     if len(filled) < 5:
         return None
     stop_pct = float(np.median([abs(t.intended_entry - t.stop) / t.intended_entry for t in filled]))
-    rr = float(
-        np.median(
-            [abs(t.take_profit - t.intended_entry) / abs(t.intended_entry - t.stop) for t in filled]
+    finite = [t for t in filled if np.isfinite(t.take_profit)]
+    rr = (
+        float(
+            np.median(
+                [
+                    abs(t.take_profit - t.intended_entry) / abs(t.intended_entry - t.stop)
+                    for t in finite
+                ]
+            )
         )
+        if finite
+        else None
     )
+    trails = [t.trail_distance / t.intended_entry for t in filled if t.trail_distance]
+    trail_pct = float(np.median(trails)) if trails else None
     hold = (
         int(
             np.median(
@@ -119,14 +131,19 @@ def _random_baseline(frame, trades: list[Trade], cost, sizing, symbol, runs: int
     exp = []
     for r in range(runs):
         rng = random.Random(seed + r)
-        bars = sorted(rng.sample(range(50, len(frame) - 2), k=min(len(filled), len(frame) - 60)))
+        pool = range(max(50, first_bar), len(frame) - 2)
+        bars = sorted(rng.sample(pool, k=min(len(filled), len(pool) - 8)))
         intents = []
         for b in bars:
             side = rng.choice(["long", "short"])
             e = closes[b]
             stop = e * (1 - stop_pct) if side == "long" else e * (1 + stop_pct)
-            tp = e + rr * (e - stop) if side == "long" else e - rr * (stop - e)
-            intents.append(Intent(b, side, e, stop, tp, max(hold * 3, 2), "random"))
+            if rr is not None:
+                tp = e + rr * (e - stop) if side == "long" else e - rr * (stop - e)
+            else:
+                tp = NO_TARGET if side == "long" else -NO_TARGET
+            trail = e * trail_pct if trail_pct else None
+            intents.append(Intent(b, side, e, stop, tp, max(hold * 3, 2), "random", trail))
         rt, req = simulate(frame, intents, cost, sizing, symbol)
         rf = [t.realized_r for t in rt if t.filled]
         if rf:
@@ -144,7 +161,8 @@ def _random_baseline(frame, trades: list[Trade], cost, sizing, symbol, runs: int
         "strategy_percentile": round(float(np.mean([strat > e for e in exp])) * 100, 1),
         "geometry": {
             "stop_pct": round(stop_pct, 5),
-            "reward_risk": round(rr, 3),
+            "reward_risk": None if rr is None else round(rr, 3),
+            "trail_pct": None if trail_pct is None else round(trail_pct, 5),
             "hold_bars": hold,
         },
     }
@@ -187,10 +205,15 @@ def run_symbol(cfg: dict[str, Any], data: Dataset) -> dict[str, Any]:
     intents = strategy.generate(data)
     filter_stats = getattr(strategy, "stats", None)
     start, end = frame.index[0], frame.index[-1] + (frame.index[1] - frame.index[0])
+    # evaluation_start: bars before it only warm up indicators (no trades, no metrics).
+    warm = v.get("evaluation_start")
+    if warm is not None:
+        start = max(start, pd.Timestamp(warm, tz=frame.index.tz))
+    window = () if warm is None else (start, end)
     split = start + (end - start) * (1 - v["oos_fraction"])
     split = split.floor("D")
 
-    full_t, full_e = _run(frame, intents, cost, sizing, data.symbol)
+    full_t, full_e = _run(frame, intents, cost, sizing, data.symbol, *window)
     is_t, is_e = _run(frame, intents, cost, sizing, data.symbol, start, split)
     oos_t, oos_e = _run(frame, intents, cost, sizing, data.symbol, split, end)
 
@@ -238,7 +261,7 @@ def run_symbol(cfg: dict[str, Any], data: Dataset) -> dict[str, Any]:
 
     sens = []
     for k in v["cost_multipliers"]:
-        t, e = _run(frame, intents, cost.scaled(k), sizing, data.symbol)
+        t, e = _run(frame, intents, cost.scaled(k), sizing, data.symbol, *window)
         p = M.performance(t, e, sizing.initial_equity)
         sens.append(
             {
@@ -256,6 +279,7 @@ def run_symbol(cfg: dict[str, Any], data: Dataset) -> dict[str, Any]:
         "timeframe": strategy.timeframe,
         "windows": {
             "full": [str(start), str(end)],
+            "warmup_from": None if warm is None else str(frame.index[0]),
             "in_sample": [str(start), str(split)],
             "out_of_sample": [str(split), str(end)],
         },
@@ -279,7 +303,7 @@ def run_symbol(cfg: dict[str, Any], data: Dataset) -> dict[str, Any]:
         "cost_sensitivity": {"points": sens, "break_even_multiplier": _break_even(sens)},
         "baselines": {
             "buy_and_hold_pct": {
-                "full": _buy_hold(frame),
+                "full": _buy_hold(frame, *window),
                 "out_of_sample": _buy_hold(frame, split, end),
             },
             "random_entries": _random_baseline(
@@ -290,6 +314,7 @@ def run_symbol(cfg: dict[str, Any], data: Dataset) -> dict[str, Any]:
                 data.symbol,
                 v["random_baseline_runs"],
                 v["seed"],
+                int(frame.index.searchsorted(start)),
             ),
         },
         "series": {

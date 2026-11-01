@@ -133,3 +133,84 @@ def test_build_wraps_regime_filter_from_config():
     assert isinstance(strat, RegimeFilter)
     assert strat.params()["regime_filter"]["min_vol_pct"] == 0.2
     assert len(cfg["_hash"]) == 16
+
+
+def test_trailing_stop_locks_in_profit_and_never_loosens():
+    from signal_bot.research.fill_model import NO_TARGET
+
+    # entry at 100 (bar 1 open); highs climb to 110, then price falls back
+    f = _bars(
+        [
+            [100, 100, 100, 100],
+            [100, 103, 99.5, 103],
+            [103, 110, 102, 109],
+            [109, 109.5, 104, 104.5],  # trail = 110 - 5 = 105 -> hit, fills at 105
+            [104.5, 120, 104, 119],
+        ]
+    )
+    intent = Intent(0, "long", 100, 98, NO_TARGET, 50, "t", trail_distance=5)
+    [t], _ = simulate(f, [intent], NO_COST, Sizing(10_000, 0.01, 100))
+    assert t.exit_reason == "trail" and t.exit_price == 105
+    assert t.signal_r == pytest.approx(2.5)  # (105 - 100) / (100 - 98)
+
+
+def test_short_trailing_stop_mirrors_long():
+    from signal_bot.research.fill_model import NO_TARGET
+
+    f = _bars([[100, 100, 100, 100], [100, 100.5, 97, 97], [97, 97.5, 90, 91], [91, 96, 90.5, 95]])
+    intent = Intent(0, "short", 100, 102, -NO_TARGET, 50, "t", trail_distance=4)
+    [t], _ = simulate(f, [intent], NO_COST, Sizing(10_000, 0.01, 100))
+    assert t.exit_reason == "trail" and t.exit_price == 94  # best 90 + 4
+
+
+def test_trend_breakout_is_causal_and_uses_trailing_stops():
+    from signal_bot.research.strategies import TrendBreakout
+
+    ds = synthetic(interval="1h", bars=8000, seed=21)
+    strat = TrendBreakout(timeframe="4h", entry_lookback=20)
+    full = strat.generate(ds)
+    assert full and all(i.trail_distance and i.trail_distance > 0 for i in full)
+    early = strat.generate(ds.slice(end=ds.frame.index[6000]))
+    cut = len(early) and early[-1].bar
+    assert [(i.bar, i.side) for i in early if i.bar < cut] == [
+        (i.bar, i.side) for i in full if i.bar < cut
+    ]
+
+
+def test_sweep_v2_filters_tight_stops_and_resets_targets(monkeypatch):
+    from signal_bot.research.fill_model import NO_TARGET
+    from signal_bot.research.strategies import LiquiditySweepBaseline, LiquiditySweepV2
+
+    base = [
+        Intent(10, "long", 100.0, 99.9, 104.0, 100, "sweep"),  # 10 bps stop -> skipped
+        Intent(20, "long", 100.0, 99.0, 104.5, 100, "sweep"),  # 100 bps, far target -> 2R
+        Intent(30, "short", 100.0, 101.0, 95.0, 100, "sweep"),
+    ]
+    monkeypatch.setattr(LiquiditySweepBaseline, "generate", lambda self, data: list(base))
+    out = LiquiditySweepV2(min_stop_bps=40, target_r=2.0).generate(None)
+    assert [(i.bar, i.take_profit) for i in out] == [(20, 102.0), (30, 98.0)]
+    trailed = LiquiditySweepV2(min_stop_bps=40, trail_r=1.5).generate(None)
+    assert trailed[0].take_profit == NO_TARGET and trailed[0].trail_distance == pytest.approx(1.5)
+    assert trailed[1].take_profit == -NO_TARGET
+
+
+def test_evaluation_start_uses_earlier_bars_only_for_warmup():
+    cfg = {
+        "name": "t",
+        "strategy": "trend_breakout",
+        "params": {"timeframe": "4h", "entry_lookback": 20},
+        "validation": {
+            "random_baseline_runs": 3,
+            "walk_forward_train_days": 60,
+            "walk_forward_test_days": 30,
+        },
+        "_hash": "x",
+    }
+    ds = synthetic(interval="1h", bars=8000, seed=21)
+    cut = ds.frame.index[3000].floor("D")
+    cfg["validation"]["evaluation_start"] = str(cut.date())
+    [r] = run_experiment(cfg, [ds])["results"]
+    assert r["windows"]["full"][0] == str(cut) and r["windows"]["warmup_from"]
+    trades = r["trades_sample"]
+    assert trades and all(pd.Timestamp(t["signal_time"]) >= cut for t in trades)
+    assert all(w["train"][0] >= str(cut.date()) for w in r["walk_forward"]["windows"])
