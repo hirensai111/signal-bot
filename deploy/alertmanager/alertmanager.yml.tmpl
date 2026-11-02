@@ -1,0 +1,39 @@
+# Rendered by entrypoint.sh: double-underscore placeholders come from the environment.
+global:
+  resolve_timeout: 5m
+templates: [/etc/alertmanager-src/telegram.tmpl]
+route:
+  receiver: __RECEIVER__
+  group_by: [alertname, symbol]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 6h
+  routes:
+    # Always-firing heartbeat: an external service (e.g. a healthchecks.io check) alerts
+    # you when these pings STOP, which covers "the whole server is down".
+    - matchers: ['alertname="Watchdog"']
+      receiver: __DEADMAN_RECEIVER__
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
+    - matchers: ['severity="critical"']
+      receiver: __RECEIVER__
+      repeat_interval: 1h
+inhibit_rules:
+  # While the bot is down, its other alerts are consequences, not news.
+  - source_matchers: ['alertname="BotDown"']
+    target_matchers: ['component="bot"']
+receivers:
+  - name: blackhole
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /tmp/telegram_token
+        chat_id: __CHAT_ID__
+        api_url: __API_URL__
+        parse_mode: HTML
+        send_resolved: true
+        message: '{{ template "signalbot.telegram" . }}'
+  - name: deadman
+    webhook_configs:
+      - url: __DEADMAN_URL__
+        send_resolved: false

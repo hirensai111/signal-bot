@@ -172,3 +172,34 @@ jobs:
               assert needed in names, needed
           print("ok")
           EOF
+
+  deploy-config:
+    name: Deployment configs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prometheus config and alert rules (promtool check + unit tests)
+        run: |
+          docker run --rm -v "$PWD/deploy/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v2.53.0 check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/deploy/prometheus:/p:ro" -w /p --entrypoint promtool prom/prometheus:v2.53.0 test rules alerts.test.yml
+      - name: Alertmanager config renders and validates
+        run: |
+          mkdir -p /tmp/am
+          docker run --rm -e RENDER_ONLY=1 -e TELEGRAM_BOT_TOKEN=1:x -e TELEGRAM_CHAT_ID=1 \
+            -e DEADMANS_SWITCH_URL=https://example.invalid/ping \
+            -v "$PWD/deploy/alertmanager:/etc/alertmanager-src:ro" \
+            --entrypoint sh prom/alertmanager:v0.27.0 /etc/alertmanager-src/entrypoint.sh > /tmp/am/alertmanager.yml
+          docker run --rm -v /tmp/am:/am:ro -v "$PWD/deploy/alertmanager:/etc/alertmanager-src:ro" \
+            --entrypoint amtool prom/alertmanager:v0.27.0 check-config /am/alertmanager.yml
+      - name: Loki and Alloy configs parse
+        run: |
+          docker run --rm -v "$PWD/deploy/loki:/l:ro" grafana/loki:3.3.2 -config.file=/l/loki.yml -verify-config
+          docker run --rm -v "$PWD/deploy/alloy:/a:ro" grafana/alloy:v1.5.1 fmt /a/config.alloy > /dev/null
+      - name: Compose file is valid
+        run: |
+          cp deploy/paper.env.example .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci/; s/^GRAFANA_DB_PASSWORD=.*/GRAFANA_DB_PASSWORD=ci/; s/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=ci/' .env
+          docker compose config --quiet

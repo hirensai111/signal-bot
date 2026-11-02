@@ -201,7 +201,12 @@ class ExecutionEngine:
 
     async def process_signal(self, signal: Signal) -> Order | None:
         coid = client_order_id_for(signal.id)
-        with bind(correlation_id=str(signal.id), signal_id=str(signal.id), order_id=coid):
+        with bind(
+            correlation_id=str(signal.id),
+            signal_id=str(signal.id),
+            order_id=coid,
+            symbol=signal.symbol,
+        ):
             return await self._process_signal(signal, coid)
 
     async def _process_signal(self, signal: Signal, coid: str) -> Order | None:

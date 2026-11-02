@@ -1,0 +1,82 @@
+// Grafana Alloy: ship every compose container's stdout to Loki.
+// The bot logs one JSON object per line; its level and subsystem become Loki labels
+// (low cardinality) and symbol / order / signal / correlation ids become structured
+// metadata, so they are searchable without exploding the index:
+//   {service="bot", level="ERROR"} | symbol="BTCUSDT"
+//   {service="bot"} | correlation_id="<signal uuid>"
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "compose" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = ".+"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.relabel.compose.output
+  labels        = {source = "docker"}
+  relabel_rules = discovery.relabel.compose.rules
+  forward_to    = [loki.process.signalbot.receiver]
+}
+
+loki.process "signalbot" {
+  stage.match {
+    selector = "{service=\"bot\"}"
+
+    stage.json {
+      expressions = {
+        ts             = "ts",
+        level          = "level",
+        logger         = "logger",
+        symbol         = "symbol",
+        order_id       = "order_id",
+        signal_id      = "signal_id",
+        correlation_id = "correlation_id",
+      }
+    }
+    stage.timestamp {
+      source = "ts"
+      format = "RFC3339Nano"
+    }
+    // signal_bot.execution.engine -> subsystem "execution"
+    stage.regex {
+      source     = "logger"
+      expression = "^signal_bot\\.(?P<subsystem>[a-z_]+)"
+    }
+    stage.labels {
+      values = {level = "", subsystem = ""}
+    }
+    stage.structured_metadata {
+      values = {
+        logger         = "",
+        symbol         = "",
+        order_id       = "",
+        signal_id      = "",
+        correlation_id = "",
+      }
+    }
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

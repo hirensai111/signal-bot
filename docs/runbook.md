@@ -1,5 +1,8 @@
 # Operations runbook
 
+Deploying on a server, dashboards, alerts, backups and the soak test: see
+[deployment.md](deployment.md). This page covers what the bot does and how to respond.
+
 ## Modes
 
 | `EXEC_MODE` | Venue | Notes |
