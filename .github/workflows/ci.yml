@@ -101,7 +101,7 @@ jobs:
         run: pytest -q -m postgres
       - name: Execution and failure scenarios on PostgreSQL
         run: >-
-          pytest -q tests/scenarios tests/test_execution_engine.py tests/test_reconciliation.py
+          pytest -q tests/scenarios tests/test_execution_engine.py tests/test_reconciliation.py tests/test_trailing.py tests/test_live_replay.py
           tests/test_outcome_monitor.py tests/test_order_state_machine.py
 
   replay:

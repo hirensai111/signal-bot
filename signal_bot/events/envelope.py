@@ -38,6 +38,7 @@ class EventType(StrEnum):
     # position lifecycle
     POSITION_CLOSED = "POSITION_CLOSED"
     PROTECTIVE_ORDER_FAILED = "PROTECTIVE_ORDER_FAILED"
+    PROTECTIVE_STOP_AMENDED = "PROTECTIVE_STOP_AMENDED"
     # risk & operations
     RISK_DENIED = "RISK_DENIED"
     RISK_HALT = "RISK_HALT"
@@ -60,6 +61,7 @@ DURABLE_EVENT_TYPES: frozenset[str] = frozenset(
         EventType.STREAM_DISCONNECTED,
         EventType.POSITION_CLOSED,
         EventType.PROTECTIVE_ORDER_FAILED,
+        EventType.PROTECTIVE_STOP_AMENDED,
         EventType.RISK_DENIED,
         EventType.RISK_HALT,
         EventType.RISK_RESUMED,

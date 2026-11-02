@@ -71,6 +71,7 @@ class InstrumentSpec:
     tick_size: Decimal
     lot_size: Decimal
     contract_value: Decimal
+    max_contracts: Decimal | None = None  # venue position size limit (Delta position_size_limit)
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,8 @@ class OrderRequest:
     stop_loss_price: Decimal | None = None
     take_profit_price: Decimal | None = None
     reduce_only: bool = False
+    # Exchange-native trailing stop distance in price units (Delta bracket_trail_amount).
+    trail_amount: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,8 @@ class ExchangeOrder:
     fees: Decimal = Decimal("0")
     reason: str | None = None
     purpose: FillPurpose = FillPurpose.ENTRY
+    stop_price: Decimal | None = None  # trigger price of a stop order
+    trail_amount: Decimal | None = None  # set on an exchange trailing stop
 
     def to_payload(self, venue: str) -> dict[str, Any]:
         d = asdict(self)
@@ -169,15 +174,22 @@ class ExchangePosition:
     take_profit_price: Decimal | None = None
     updated_at: datetime | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    trail_amount: Decimal | None = None  # exchange trailing stop distance, if one is attached
 
     def to_payload(self, venue: str) -> dict[str, Any]:
+        def s(v):
+            return None if v is None else str(v)
+
         return {
             "venue": venue,
             "symbol": self.symbol,
             "size": str(self.size),
-            "entry_price": None if self.entry_price is None else str(self.entry_price),
+            "entry_price": s(self.entry_price),
             "has_stop_loss": self.has_stop_loss,
             "has_take_profit": self.has_take_profit,
+            "stop_loss_price": s(self.stop_loss_price),
+            "take_profit_price": s(self.take_profit_price),
+            "trail_amount": s(self.trail_amount),
             "updated_at": None if self.updated_at is None else self.updated_at.isoformat(),
         }
 
@@ -221,7 +233,22 @@ class ExchangeAdapter(Protocol):
 
     async def close_position(self, symbol: str, client_order_id: str) -> ExchangeOrder: ...
 
+    async def amend_stop(
+        self, symbol: str, client_order_id: str, stop_price: Decimal
+    ) -> ExchangePosition | None:
+        """Move the resting protective stop of the position on *symbol* to *stop_price*.
+
+        Returns the venue's view of the position afterwards (``None`` if flat).  Raises
+        :class:`OrderRejected` if the venue refused, :class:`AmbiguousOrderOutcome` if the
+        outcome is unknown (callers re-read positions to find out).
+        """
+        ...
+
     async def available_balance(self) -> Decimal: ...
+
+    async def account_equity(self) -> Decimal:
+        """Wallet balance plus unrealised PnL (the capital the portfolio rules share)."""
+        ...
 
 
 def _d(value: Any) -> Decimal | None:
@@ -249,6 +276,8 @@ def order_from_payload(p: dict[str, Any]) -> ExchangeOrder:
         fees=_d(p.get("fees")) or Decimal("0"),
         reason=p.get("reason"),
         purpose=FillPurpose(p.get("purpose", FillPurpose.ENTRY)),
+        stop_price=_d(p.get("stop_price")),
+        trail_amount=_d(p.get("trail_amount")),
     )
 
 

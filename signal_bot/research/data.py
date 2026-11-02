@@ -57,7 +57,7 @@ OHLCV = [
     "trade_count",
     "taker_buy_volume",
 ]
-INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}
+INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 
 
 @dataclass

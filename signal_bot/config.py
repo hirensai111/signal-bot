@@ -37,7 +37,9 @@ class Settings(BaseSettings):
     # Binance
     binance_api_key: str = ""
     binance_api_secret: str = ""
-    binance_testnet: bool = True
+    # Market data only (no orders are ever sent to Binance).  The testnet feed is
+    # synthetic, so strategies researched on production data must not read it.
+    binance_testnet: bool = False
 
     # Telegram
     telegram_bot_token: str = ""
@@ -60,6 +62,10 @@ class Settings(BaseSettings):
     delta_api_key: str = ""
     delta_api_secret: str = ""
     delta_ws_origin: str = ""  # overridden by model_validator below
+    delta_ws_url: str = ""  # override the documented private socket for DELTA_MODE
+    delta_ws_auth_path: str = "/live"  # key-auth signs "GET" + timestamp + this path
+    # Sign of bracket_trail_amount: "positive" or "negative_for_long" (confirm on testnet).
+    delta_trail_amount_sign: str = "positive"
 
     # Execution: "paper" (realistic simulated fills on live Delta books) or "live".
     # "dry_run" is accepted as a deprecated alias for "paper".
@@ -96,8 +102,19 @@ class Settings(BaseSettings):
     ops_port: int = 8080
     operator_token: str = ""  # empty => control endpoints disabled
 
-    # Strategy release
-    strategy_config: str = "signal_bot/research/strategies/liquidity_sweep.toml"
+    # Strategy release.  The config's ``strategy`` field selects the live signal source:
+    # "trend_breakout" (4h trend portfolio) or "liquidity_sweep" (the 2.0 strategy).
+    strategy_config: str = "signal_bot/research/strategies/trend_portfolio.toml"
+
+    # Trailing stops: "stepped" moves the exchange-resident stop at each completed bar,
+    # exactly as researched; "native" uses Delta's bracket_trail_amount (continuous,
+    # not the researched exit; enable only after the testnet trail check).
+    trail_mode: str = "stepped"
+    # Trend pipeline: how long after a 4h close to wait for every symbol's candle before
+    # deciding the batch with whatever has arrived.
+    trend_batch_timeout_seconds: float = 120.0
+    # Completed 4h bars required before a symbol may trade (EMA200 warm-up).
+    trend_min_history_bars: int = 1000
 
     @model_validator(mode="after")
     def set_default_ws_origin(self):
@@ -133,6 +150,13 @@ class Settings(BaseSettings):
                     "Refusing production trading: set LIVE_TRADING_ACKNOWLEDGED=true after "
                     "completing the go-live checklist in docs/runbook.md"
                 )
+        if self.trail_mode not in ("stepped", "native"):
+            problems.append(f"TRAIL_MODE must be stepped or native, got {self.trail_mode!r}")
+        if self.delta_trail_amount_sign not in ("positive", "negative_for_long"):
+            problems.append(
+                "DELTA_TRAIL_AMOUNT_SIGN must be positive or negative_for_long, "
+                f"got {self.delta_trail_amount_sign!r}"
+            )
         if self.ops_host not in ("127.0.0.1", "localhost", "::1") and not self.operator_token:
             problems.append(
                 "OPS_HOST is non-local; set OPERATOR_TOKEN to protect control endpoints"

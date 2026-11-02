@@ -51,9 +51,22 @@ class DataIngestor:
     # 1h/4h streams are required: HTF swing levels must keep updating after backfill.
     LIVE_STREAMS = ("kline_1m", "kline_5m", "kline_1h", "kline_4h", "aggTrade")
 
-    def __init__(self, queue: asyncio.Queue, message_limit: int | None = None) -> None:
+    def __init__(
+        self,
+        queue: asyncio.Queue,
+        message_limit: int | None = None,
+        *,
+        symbols: list[str] | None = None,
+        streams: tuple[str, ...] | None = None,
+        backfill_intervals: tuple[str, ...] | None = None,
+        backfill_limit: int = 500,
+    ) -> None:
         self.queue = queue
         self.message_limit = message_limit
+        self.symbols = list(symbols) if symbols else list(settings.symbols)
+        self.streams = tuple(streams or self.LIVE_STREAMS)
+        self.backfill_intervals = tuple(backfill_intervals or self.BACKFILL_INTERVALS)
+        self.backfill_limit = backfill_limit
         self._counts: dict[str, int] = {}
         self._shutdown = asyncio.Event()
         self._total_received = 0
@@ -100,7 +113,7 @@ class DataIngestor:
 
     async def _run_with_client(self, client: AsyncClient) -> None:
         try:
-            logger.info("Starting backfill for %d symbols...", len(settings.symbols))
+            logger.info("Starting backfill for %d symbols...", len(self.symbols))
             await self._backfill(client)
             logger.info("Backfill complete. Starting websocket...")
             await self._websocket_loop(client)
@@ -109,12 +122,12 @@ class DataIngestor:
             logger.info("Client connection closed.")
 
     async def _backfill(self, client: AsyncClient) -> None:
-        for symbol in settings.symbols:
-            for interval in self.BACKFILL_INTERVALS:
+        for symbol in self.symbols:
+            for interval in self.backfill_intervals:
                 logger.debug("Backfilling %s %s...", symbol, interval)
                 try:
                     klines = await client.futures_klines(
-                        symbol=symbol, interval=interval, limit=500
+                        symbol=symbol, interval=interval, limit=self.backfill_limit
                     )
                 except Exception:
                     logger.exception("Failed to backfill %s %s", symbol, interval)
@@ -132,9 +145,7 @@ class DataIngestor:
 
     async def _websocket_loop(self, client: AsyncClient) -> None:
         bsm = BinanceSocketManager(client)
-        streams = [
-            f"{sym.lower()}@{stream}" for sym in settings.symbols for stream in self.LIVE_STREAMS
-        ]
+        streams = [f"{sym.lower()}@{stream}" for sym in self.symbols for stream in self.streams]
 
         backoff = 1.0
         while not self._shutdown.is_set():

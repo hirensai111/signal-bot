@@ -1,6 +1,9 @@
 """Startup: schema, instruments, and the full event-driven pipeline.
 
-Wiring summary (see docs/architecture.md):
+Wiring summary (see docs/architecture.md).  The strategy config selects the signal
+source: ``strategy = "trend_breakout"`` runs the 4h trend portfolio
+(signals/trend_live.py: completed 4h candles -> shared decision code -> portfolio
+rules -> engine, with stepped trailing stops); otherwise the 2.0 liquidity sweep:
 
     Binance WS ─► ingest queue ─► QueueWriter ─(persist, then fan out)─► HTF scanner   {1h,4h}
                                                                     ├─► microstructure {1m,5m}
@@ -27,6 +30,7 @@ from sqlalchemy import select
 
 from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal, async_engine
+from signal_bot.db.migrate import upgrade as upgrade_schema
 from signal_bot.db.models import Base, Instrument
 from signal_bot.delivery.telegram_bot import TelegramNotifier
 from signal_bot.delta.client import DeltaClient, DeltaWebSocket
@@ -34,6 +38,8 @@ from signal_bot.events import Event, EventBus, EventType, SqlEventJournal
 from signal_bot.execution.delta_adapter import DeltaExchangeAdapter, DeltaStreamBridge
 from signal_bot.execution.engine import EXEC_MODE, ExecutionConfig, ExecutionEngine
 from signal_bot.execution.order_store import OrderStore
+from signal_bot.execution.trailing import TrailingStopManager
+from signal_bot.features.candle_history import CandleHistory
 from signal_bot.features.htf_levels import HtfLevelScanner
 from signal_bot.features.microstructure import MicrostructureEngine
 from signal_bot.ingest.binance_ws import DataIngestor, Kline
@@ -44,8 +50,21 @@ from signal_bot.observability.server import OpsServer
 from signal_bot.observability.status import StatusService
 from signal_bot.provenance import git_info, package_version
 from signal_bot.risk.governor import RiskGovernor
+from signal_bot.risk.portfolio import (
+    PortfolioLimits,
+    apply_operator_caps,
+    exposure_summary,
+    governor_defaults,
+)
 from signal_bot.signals.risk_sizer import RiskSizer
 from signal_bot.signals.sweep_detector import SweepDetector
+from signal_bot.signals.trend import TrendParams
+from signal_bot.signals.trend_live import (
+    LivePortfolio,
+    TrendPipeline,
+    TrendSignalGenerator,
+    binance_rest_klines,
+)
 from signal_bot.storage.writer import QueueWriter, candle_close_time
 from signal_bot.tracking.outcome_monitor import OutcomeMonitor
 from signal_bot.tracking.reconciliation import Reconciler
@@ -109,6 +128,7 @@ _INSTRUMENT_DEFAULTS = {
 async def init_schema() -> None:
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(upgrade_schema)
     logger.info("Schema initialised.")
 
 
@@ -131,12 +151,23 @@ async def seed_instruments() -> None:
 
 
 def load_strategy_release() -> dict:
+    """Identity of the strategy release, plus its full config document (``_doc``)."""
     path = Path(settings.strategy_config)
     if not path.exists():
-        return {"name": "liquidity_sweep", "version": "unversioned"}
+        return {"name": "liquidity_sweep", "version": "unversioned", "_doc": {}}
     with path.open("rb") as fh:
         doc = tomllib.load(fh)
-    return {"name": doc.get("name"), "version": doc.get("version"), "config_path": str(path)}
+    return {
+        "name": doc.get("name"),
+        "version": doc.get("version"),
+        "strategy": doc.get("strategy"),
+        "config_path": str(path),
+        "_doc": doc,
+    }
+
+
+def is_trend(release: dict) -> bool:
+    return release.get("strategy") == "trend_breakout"
 
 
 # ---------------------------------------------------------------------------
@@ -254,12 +285,24 @@ async def main() -> None:
         raise SystemExit(2)
 
     live = settings.exec_mode == "live"
-    strategy = load_strategy_release()
+    release = load_strategy_release()
+    doc = release.pop("_doc")
+    strategy = release
+    trend_mode = is_trend(release)
+    symbols = list(doc.get("universe", {}).get("symbols") or settings.symbols)
+    if not trend_mode:
+        symbols = list(settings.symbols)
+    if trend_mode and settings.binance_testnet:
+        logger.critical(
+            "Configuration error: the trend strategy needs the production Binance market-data "
+            "feed it was researched on (public, no keys); set BINANCE_TESTNET=false"
+        )
+        raise SystemExit(2)
     logger.info(
         "Bot starting | mode=%s delta=%s symbols=%s strategy=%s@%s settings=%s",
         settings.exec_mode,
         settings.delta_mode,
-        settings.symbols,
+        symbols,
         strategy.get("name"),
         strategy.get("version"),
         settings.fingerprint(),
@@ -278,17 +321,20 @@ async def main() -> None:
     bus = EventBus(SqlEventJournal(AsyncSessionLocal))
     telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
     delta_client = DeltaClient(
-        settings.delta_api_key, settings.delta_api_secret, settings.delta_mode
+        settings.delta_api_key, settings.delta_api_secret, settings.delta_mode, symbols=symbols
     )
 
     async with delta_client:  # loads Delta products (public) for symbol mapping
         delta_adapter = DeltaExchangeAdapter(delta_client)
+        # Symbols Delta doesn't list as live perpetuals are still ingested (features,
+        # research) but are not tradable; their signals are refused as symbol_unmapped.
+        tradable = [s for s in symbols if s in delta_client.symbol_map._binance_to_delta]
         if live:
             adapter = delta_adapter
             mode = EXEC_MODE.LIVE
         else:
             adapter = PaperBroker(
-                {s: delta_adapter.instrument(s) for s in settings.symbols},
+                {s: delta_adapter.instrument(s) for s in tradable},
                 bus,
                 book_source=delta_adapter.order_book,
                 session_factory=AsyncSessionLocal,
@@ -320,11 +366,14 @@ async def main() -> None:
                 no_fill_timeout=settings.no_fill_timeout_seconds,
                 max_book_age_seconds=settings.max_book_age_seconds,
                 require_stream_on_start=live,
+                trail_mode=settings.trail_mode,
             ),
             alerts=telegram,
             mode=mode,
         )
         monitor = OutcomeMonitor(bus, store, adapter, telegram_notifier=telegram, governor=governor)
+        history = CandleHistory("4h")
+        trailing = TrailingStopManager(adapter, store, history, bus=bus, alerts=telegram)
         reconciler = Reconciler(
             adapter,
             store,
@@ -336,6 +385,7 @@ async def main() -> None:
             interval=settings.reconcile_interval_seconds,
             unknown_grace_seconds=settings.unknown_order_grace_seconds,
             block_on_orphans=settings.block_on_orphan_positions,
+            trailing=trailing,
         )
         engine.reconciler = reconciler
         position_view = PositionView(bus)
@@ -346,15 +396,72 @@ async def main() -> None:
             replay[sub.name] = await bus.replay(sub)
 
         ingest_queue: asyncio.Queue = asyncio.Queue()
-        ingestor = DataIngestor(queue=ingest_queue)
+        if trend_mode:
+            # Only completed 4h candles drive the trend portfolio.
+            ingestor = DataIngestor(
+                queue=ingest_queue,
+                symbols=symbols,
+                streams=("kline_4h",),
+                backfill_intervals=("4h",),
+            )
+        else:
+            ingestor = DataIngestor(queue=ingest_queue, symbols=symbols)
         writer = QueueWriter(source_queue=ingest_queue)
-        htf_scanner = HtfLevelScanner(candle_queue=writer.subscribe("htf_levels", {"1h", "4h"}))
-        micro_engine = MicrostructureEngine(
-            candle_queue=writer.subscribe("microstructure", {"1m", "5m"})
-        )
-        sweep_queue = writer.subscribe("signals", {"1m", "5m"})
-        detector = SweepDetector(candle_queue=sweep_queue)
-        sizer = RiskSizer()
+        pipeline = None
+        if trend_mode:
+            params = TrendParams.from_mapping(doc.get("params", {}))
+            explicit = {k: getattr(settings, k) for k in settings.model_fields_set}
+            limits = apply_operator_caps(
+                PortfolioLimits.from_mapping(doc.get("portfolio")), explicit
+            )
+            portfolio = LivePortfolio(adapter, store, history, AsyncSessionLocal, limits)
+            pipeline = TrendPipeline(
+                TrendSignalGenerator(params, history, settings.trend_min_history_bars),
+                portfolio,
+                writer.subscribe("trend", {"4h"}),
+                signal_queue,
+                bus,
+                AsyncSessionLocal,
+                universe=symbols,
+                tradable=set(tradable),
+                trailing=trailing,
+                telegram=telegram,
+                strategy=strategy,
+                batch_timeout=settings.trend_batch_timeout_seconds,
+                max_candle_lag=settings.max_candle_lag_seconds,
+            )
+            governor.portfolio_check = pipeline.recheck
+            governor.project_open_risk = False
+            for key, value in governor_defaults(limits, explicit).items():
+                setattr(
+                    governor,
+                    key,
+                    Decimal(str(value)) if key == "daily_loss_limit_r" else int(value),
+                )
+            logger.info(
+                "Governor limits for the trend portfolio: positions=%s daily_loss=%sR "
+                "trades/day=%s consecutive_losses=%s",
+                governor.max_concurrent_positions,
+                governor.daily_loss_limit_r,
+                governor.max_trades_per_day,
+                governor.max_consecutive_losses,
+            )
+
+            async def portfolio_monitor():
+                return exposure_summary(await portfolio.state(), limits)
+
+            governor.portfolio_monitor = portfolio_monitor
+            # Before the ingestor starts, so live candles extend the warm-up history.
+            await pipeline.warmup(binance_rest_klines)
+            htf_scanner = micro_engine = detector = None
+        else:
+            htf_scanner = HtfLevelScanner(candle_queue=writer.subscribe("htf_levels", {"1h", "4h"}))
+            micro_engine = MicrostructureEngine(
+                candle_queue=writer.subscribe("microstructure", {"1m", "5m"})
+            )
+            sweep_queue = writer.subscribe("signals", {"1m", "5m"})
+            detector = SweepDetector(candle_queue=sweep_queue)
+            sizer = RiskSizer()
 
         stream = None
         if live:
@@ -376,6 +483,8 @@ async def main() -> None:
                 "dirty": code["dirty"],
                 "strategy": strategy,
                 "settings_fingerprint": settings.fingerprint(),
+                "tradable_symbols": tradable,
+                "not_on_delta": delta_client.symbol_map.missing,
             },
             governor=governor,
             bus=bus,
@@ -391,6 +500,8 @@ async def main() -> None:
             ingestor=ingestor,
             replay_counts=replay,
             max_candle_lag_seconds=settings.max_candle_lag_seconds,
+            trend=pipeline,
+            trailing=trailing,
         )
         ops = OpsServer(
             status,
@@ -408,14 +519,31 @@ async def main() -> None:
         tasks = [
             asyncio.create_task(ingestor.run(), name="ingestor"),
             asyncio.create_task(writer.run(), name="writer"),
-            asyncio.create_task(htf_scanner.run(), name="htf_scanner"),
-            asyncio.create_task(micro_engine.run(), name="micro_engine"),
-            asyncio.create_task(
-                signal_pipeline(
-                    detector, sizer, sweep_queue, signal_queue, bus, telegram, shutdown, strategy
+        ]
+        if pipeline is not None:
+            tasks += [
+                asyncio.create_task(pipeline.run(), name="trend_pipeline"),
+                asyncio.create_task(trailing.run_periodic(shutdown), name="trailing_stops"),
+            ]
+        else:
+            tasks += [
+                asyncio.create_task(htf_scanner.run(), name="htf_scanner"),
+                asyncio.create_task(micro_engine.run(), name="micro_engine"),
+                asyncio.create_task(
+                    signal_pipeline(
+                        detector,
+                        sizer,
+                        sweep_queue,
+                        signal_queue,
+                        bus,
+                        telegram,
+                        shutdown,
+                        strategy,
+                    ),
+                    name="signal_pipeline",
                 ),
-                name="signal_pipeline",
-            ),
+            ]
+        tasks += [
             asyncio.create_task(keep_alive(engine.start, shutdown), name="execution_engine"),
             asyncio.create_task(monitor.run(), name="outcome_monitor"),
             asyncio.create_task(position_view.run(), name="position_view"),
@@ -437,8 +565,17 @@ async def main() -> None:
         finally:
             logger.info("Shutting down pipeline...")
             shutdown.set()
-            for component in (ingestor, writer, htf_scanner, micro_engine, detector, monitor):
-                component.shutdown()
+            for component in (
+                ingestor,
+                writer,
+                htf_scanner,
+                micro_engine,
+                detector,
+                monitor,
+                pipeline,
+            ):
+                if component is not None:
+                    component.shutdown()
             position_view.stop()
             if isinstance(adapter, PaperBroker):
                 adapter.stop()

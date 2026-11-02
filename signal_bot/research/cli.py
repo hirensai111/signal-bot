@@ -34,7 +34,9 @@ def _datasets(args) -> list[Dataset]:
     for i, sym in enumerate(symbols):
         if args.source == "binance-vision":
             out.append(
-                load_binance_vision(sym, "1m", args.start, args.end, cache_dir=args.cache_dir)
+                load_binance_vision(
+                    sym, args.data_interval, args.start, args.end, cache_dir=args.cache_dir
+                )
             )
         elif args.source == "synthetic":
             out.append(synthetic(sym, args.interval, bars=args.bars, seed=args.seed + i))
@@ -90,6 +92,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--start", default="2025-10", help="first month (YYYY-MM) for binance-vision")
     run.add_argument("--end", default="2026-09", help="last month (YYYY-MM) for binance-vision")
     run.add_argument("--interval", default="5m", help="bar size for synthetic/csv sources")
+    run.add_argument(
+        "--data-interval",
+        default="1m",
+        help="kline size to download for binance-vision (1m for the sweep replay, 1h for trend)",
+    )
     run.add_argument("--csv")
     run.add_argument("--seed", type=int, default=7)
     run.add_argument("--bars", type=int, default=20_000)

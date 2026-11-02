@@ -7,10 +7,11 @@ Responsibilities beyond plain REST calls:
 * normalise Delta REST and WebSocket payloads into venue-neutral objects and
   bus events with deterministic ids (so redelivered messages dedupe).
 
-Payload parsing is deliberately tolerant: it accepts both the documented v2
-socket shape (``{"type": "orders", ...fields}``) and the ``{"channel": ...,
-"data": {...}}`` shape used by earlier versions of this bot.  Field mappings
-marked ``VERIFY`` should be confirmed against Delta testnet before live use.
+Socket messages follow the documented private channels (``orders``,
+``positions``, ``user_trades`` / ``v2/user_trades``): flat update messages and
+``action: "snapshot"`` messages with a ``result`` list.  The legacy
+``{"channel": ..., "data": {...}}`` shape is still accepted.  Field mappings
+marked ``VERIFY`` need confirming with a real testnet fill before live use.
 """
 
 from __future__ import annotations
@@ -119,6 +120,10 @@ def parse_order(raw: dict[str, Any]) -> ExchangeOrder:
         fees=_dec(raw.get("paid_commission") or raw.get("commission")),
         reason=raw.get("cancellation_reason") or raw.get("reason"),
         purpose=_purpose(raw),
+        stop_price=_dec(raw["stop_price"]) if raw.get("stop_price") not in (None, "") else None,
+        trail_amount=_dec(raw["trail_amount"])
+        if raw.get("trail_amount") not in (None, "")
+        else None,
     )
 
 
@@ -156,6 +161,9 @@ class DeltaExchangeAdapter:
             tick_size=_dec(product.get("tick_size"), "1"),
             lot_size=_dec(product.get("min_size") or product.get("minimum_order_size"), "1"),
             contract_value=_dec(product.get("contract_value"), "1"),
+            max_contracts=_dec(product["position_size_limit"])
+            if product.get("position_size_limit") not in (None, "")
+            else None,
         )
 
     def binance_symbol(self, venue_symbol: str) -> str | None:
@@ -214,6 +222,7 @@ class DeltaExchangeAdapter:
                     take_profit_price=request.take_profit_price,
                     client_order_id=request.client_order_id,
                     order_type=request.order_type,
+                    trail_amount=request.trail_amount,
                 ),
             )
         except aiohttp.ClientConnectorError as exc:
@@ -292,8 +301,8 @@ class DeltaExchangeAdapter:
         out: list[ExchangePosition] = []
         # A stop counts as present if the position carries bracket SL fields *or* a
         # reduce-side stop-loss order is resting for that product (VERIFY on testnet).
-        stop_orders = {
-            o.symbol for o in await self.open_orders() if o.purpose == FillPurpose.STOP_LOSS
+        stop_orders: dict[str, ExchangeOrder] = {
+            o.symbol: o for o in await self.open_orders() if o.purpose == FillPurpose.STOP_LOSS
         }
         for venue_symbol, product in self.client.symbol_map._products.items():
             if venue_symbol not in self.client.symbol_map._delta_to_binance:
@@ -313,21 +322,30 @@ class DeltaExchangeAdapter:
                 size = _dec(row.get("size"))
                 if size == 0:
                     continue
+                sym = str(row.get("product_symbol") or venue_symbol)
+                resting = stop_orders.get(sym)
+                # Delta's Position schema has no bracket fields: the protective stop is a
+                # resting stop_loss_order on the product.  Bracket fields on the row are
+                # honoured if present.  VERIFY on testnet (trail_check).
+                stop_price = (
+                    _dec(row["bracket_stop_loss_price"])
+                    if row.get("bracket_stop_loss_price")
+                    else (resting.stop_price if resting else None)
+                )
                 out.append(
                     ExchangePosition(
-                        symbol=str(row.get("product_symbol") or venue_symbol),
+                        symbol=sym,
                         size=size,
                         entry_price=_dec(row.get("entry_price"))
                         if row.get("entry_price")
                         else None,
-                        # VERIFY: Delta exposes attached bracket prices on the position.
                         has_stop_loss=bool(row.get("bracket_stop_loss_price"))
-                        or str(row.get("product_symbol") or venue_symbol) in stop_orders,
+                        or resting is not None,
                         has_take_profit=bool(row.get("bracket_take_profit_price")),
-                        stop_loss_price=_dec(row["bracket_stop_loss_price"])
-                        if row.get("bracket_stop_loss_price")
-                        else None,
+                        stop_loss_price=stop_price,
                         updated_at=_ts(row.get("updated_at")),
+                        trail_amount=resting.trail_amount if resting else None,
+                        extra={"unrealized_pnl": row.get("unrealized_pnl")},
                     )
                 )
         return out
@@ -345,7 +363,8 @@ class DeltaExchangeAdapter:
         for row in _result(resp) or []:
             if str(row.get("order_id")) != order.exchange_order_id:
                 continue
-            out.append(parse_fill(row, client_order_id))
+            # Fills of the entry order itself: entries by definition.
+            out.append(replace(parse_fill(row, client_order_id), purpose=FillPurpose.ENTRY))
         return out
 
     async def exit_fills(
@@ -410,6 +429,65 @@ class DeltaExchangeAdapter:
         body.setdefault("reduce_only", True)
         return parse_order(body)
 
+    async def amend_stop(
+        self, symbol: str, client_order_id: str, stop_price: Decimal
+    ) -> ExchangePosition | None:
+        """Move the resting stop-loss order on *symbol* (PUT /v2/orders with stop_price).
+
+        If no stop order is resting, a new position stop is attached instead
+        (POST /v2/orders/bracket), so the call always leaves a stop at *stop_price*
+        or raises.  VERIFY on testnet: editing a bracket child's stop_price.
+        """
+        try:
+            resting = next(
+                (
+                    o
+                    for o in await self.open_orders()
+                    if o.symbol == symbol and o.purpose == FillPurpose.STOP_LOSS
+                ),
+                None,
+            )
+            if resting is not None and resting.exchange_order_id:
+                await self._call(
+                    "amend_stop",
+                    self.client.edit_order(
+                        resting.exchange_order_id, self._product_id(symbol), stop_price=stop_price
+                    ),
+                )
+            else:
+                await self._call(
+                    "amend_stop",
+                    self.client.attach_position_bracket(self._product_id(symbol), stop_price),
+                )
+        except aiohttp.ClientResponseError as exc:
+            if exc.status in (401, 403):
+                raise AuthenticationFailed(str(exc)) from exc
+            if 400 <= exc.status < 500:
+                raise OrderRejected(f"http_{exc.status}: {exc.message}") from exc
+            raise AmbiguousOrderOutcome(f"http_{exc.status}: {exc.message}") from exc
+        except (TimeoutError, aiohttp.ClientError, ConnectionError) as exc:
+            raise AmbiguousOrderOutcome(f"{type(exc).__name__}: {exc}") from exc
+        return next((p for p in await self.positions() if p.symbol == symbol), None)
+
+    async def account_equity(self) -> Decimal:
+        """Wallet ``balance`` plus each open position's ``unrealized_pnl`` (both documented)."""
+        resp = await self._call("balance", self.client.get_balance())
+        rows = _result(resp)
+        if isinstance(resp, dict) and "balances" in resp:
+            rows = resp["balances"]
+        balance = None
+        for row in rows or []:
+            asset = str(row.get("asset_symbol") or row.get("asset") or "").upper()
+            if asset in ("USD", "USDT"):
+                balance = _dec(row.get("balance"))
+                break
+        if balance is None:
+            raise ExchangeUnavailable("no USD/USDT balance row in wallet response")
+        unrealized = sum(
+            (_dec(p.extra.get("unrealized_pnl")) for p in await self.positions()), Decimal("0")
+        )
+        return balance + unrealized
+
     async def available_balance(self) -> Decimal:
         resp = await self._call("balance", self.client.get_balance())
         rows = _result(resp)
@@ -422,19 +500,40 @@ class DeltaExchangeAdapter:
         raise ExchangeUnavailable("no USD/USDT balance row in wallet response")
 
 
+def _fill_purpose(row: dict[str, Any]) -> FillPurpose:
+    """A fill message can't say whether it opened or closed our trade.
+
+    Liquidation/ADL are explicit; otherwise the purpose stays UNKNOWN and the order
+    store classifies it against the local order's side (same side = entry).
+    """
+    reason = str(row.get("reason") or row.get("R") or row.get("fill_type") or "").lower()
+    if reason in ("liquidation", "adl"):
+        return FillPurpose.LIQUIDATION
+    purpose = _purpose(row)
+    return FillPurpose.UNKNOWN if purpose == FillPurpose.ENTRY else purpose
+
+
 def parse_fill(row: dict[str, Any], client_order_id: str | None = None) -> ExchangeFill:
+    """Parse a fill from REST /v2/fills, the ``user_trades`` channel or ``v2/user_trades``.
+
+    v2/user_trades uses short keys: f=fill id, o=order id, c=client order id, S=side,
+    s=size, p=price, r=role, t=timestamp (µs), R=reason.  It carries no commission,
+    so ``c`` must never be read as a fee.
+    """
+    fill_id = row.get("fill_id") or row.get("f") or row.get("id")
+    role = str(row.get("role") or row.get("r") or "").lower()
     return ExchangeFill(
-        fill_id=f"delta:{row.get('id') or row.get('fill_id') or row.get('f')}",
-        client_order_id=client_order_id or row.get("client_order_id"),
+        fill_id=f"delta:{fill_id}",
+        client_order_id=client_order_id or row.get("client_order_id") or row.get("c") or None,
         exchange_order_id=str(row.get("order_id") or row.get("o") or "") or None,
         symbol=str(row.get("product_symbol") or row.get("symbol") or row.get("sy") or ""),
         side=str(row.get("side") or row.get("S") or "").lower(),
         qty=_dec(row.get("size") or row.get("s")),
         price=_dec(row.get("price") or row.get("p")),
-        fee=_dec(row.get("commission") or row.get("c")),
-        liquidity="maker" if str(row.get("role", "")).lower() == "maker" else "taker",
-        purpose=_purpose(row),
-        occurred_at=_ts(row.get("created_at") or row.get("timestamp")),
+        fee=_dec(row.get("commission")),
+        liquidity="maker" if role == "maker" else "taker",
+        purpose=_fill_purpose(row),
+        occurred_at=_ts(row.get("created_at") or row.get("timestamp") or row.get("t")),
     )
 
 
@@ -443,65 +542,90 @@ def parse_fill(row: dict[str, Any], client_order_id: str | None = None) -> Excha
 # ---------------------------------------------------------------------------
 
 
+ORDER_CHANNELS = ("orders", "private_orders")
+POSITION_CHANNELS = ("positions", "private_positions")
+FILL_CHANNELS = ("user_trades", "v2/user_trades", "fills")
+CONTROL_TYPES = ("heartbeat", "subscriptions", "key-auth", "unauth", "pong")
+
+
+def _items(msg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Updates are flat messages; snapshots carry a ``result`` list (action=snapshot)."""
+    if isinstance(msg.get("data"), dict):  # legacy {"channel": ..., "data": {...}} shape
+        return [msg["data"]]
+    if msg.get("action") == "snapshot" and isinstance(msg.get("result"), list):
+        symbol = msg.get("symbol")
+        return [{**row, "symbol": row.get("symbol") or symbol} for row in msg["result"]]
+    return [msg]
+
+
+def _order_event(raw: dict[str, Any]) -> Event | None:
+    order = parse_order(raw)
+    if not order.client_order_id:
+        return None
+    return Event.create(
+        EventType.EXCHANGE_ORDER_UPDATE,
+        order.to_payload(VENUE),
+        source=VENUE,
+        event_id=deterministic_event_id(
+            VENUE,
+            "order",
+            order.exchange_order_id,
+            order.state,
+            order.filled_size,
+            order.updated_at.isoformat(),
+        ),
+        occurred_at=order.updated_at,
+    )
+
+
+def _position_event(raw: dict[str, Any]) -> Event:
+    symbol = str(raw.get("product_symbol") or raw.get("symbol") or "")
+    pos = ExchangePosition(
+        symbol=symbol,
+        size=_dec(raw.get("size")),
+        entry_price=_dec(raw.get("entry_price")) if raw.get("entry_price") else None,
+        updated_at=_ts(raw.get("updated_at") or raw.get("timestamp")),
+        extra={"product_id": raw.get("product_id")},
+    )
+    payload = pos.to_payload(VENUE)
+    payload["product_id"] = raw.get("product_id")
+    return Event.create(
+        EventType.EXCHANGE_POSITION_UPDATE,
+        payload,
+        source=VENUE,
+        event_id=deterministic_event_id(VENUE, "position", symbol, pos.size, payload["updated_at"]),
+        occurred_at=pos.updated_at,
+    )
+
+
+def _fill_event(raw: dict[str, Any]) -> Event:
+    fill = parse_fill(raw)
+    return Event.create(
+        EventType.EXCHANGE_FILL,
+        fill.to_payload(VENUE),
+        source=VENUE,
+        event_id=deterministic_event_id(VENUE, "fill", fill.fill_id),
+        occurred_at=fill.occurred_at,
+    )
+
+
 def normalize_ws_message(msg: dict[str, Any]) -> list[Event]:
     """Translate one raw Delta socket message into zero or more bus events."""
+    if not isinstance(msg, dict):
+        return []
     channel = msg.get("channel") or msg.get("type") or ""
-    data = msg.get("data") if isinstance(msg.get("data"), dict) else msg
+    if channel in CONTROL_TYPES:
+        return []
     events: list[Event] = []
-
-    if channel in ("private_orders", "orders"):
-        order = parse_order(data)
-        if not order.client_order_id:
-            return events
-        events.append(
-            Event.create(
-                EventType.EXCHANGE_ORDER_UPDATE,
-                order.to_payload(VENUE),
-                source=VENUE,
-                event_id=deterministic_event_id(
-                    VENUE,
-                    "order",
-                    order.exchange_order_id,
-                    order.state,
-                    order.filled_size,
-                    order.updated_at.isoformat(),
-                ),
-                occurred_at=order.updated_at,
-            )
-        )
-    elif channel in ("private_positions", "positions"):
-        symbol = str(data.get("product_symbol") or data.get("symbol") or "")
-        pos = ExchangePosition(
-            symbol=symbol,
-            size=_dec(data.get("size")),
-            entry_price=_dec(data.get("entry_price")) if data.get("entry_price") else None,
-            updated_at=_ts(data.get("updated_at") or data.get("timestamp")),
-            extra={"product_id": data.get("product_id")},
-        )
-        payload = pos.to_payload(VENUE)
-        payload["product_id"] = data.get("product_id")
-        events.append(
-            Event.create(
-                EventType.EXCHANGE_POSITION_UPDATE,
-                payload,
-                source=VENUE,
-                event_id=deterministic_event_id(
-                    VENUE, "position", symbol, pos.size, payload["updated_at"]
-                ),
-                occurred_at=pos.updated_at,
-            )
-        )
-    elif channel in ("v2/user_trades", "user_trades", "fills"):
-        fill = parse_fill(data)
-        events.append(
-            Event.create(
-                EventType.EXCHANGE_FILL,
-                fill.to_payload(VENUE),
-                source=VENUE,
-                event_id=deterministic_event_id(VENUE, "fill", fill.fill_id),
-                occurred_at=fill.occurred_at,
-            )
-        )
+    for raw in _items(msg):
+        if channel in ORDER_CHANNELS:
+            event = _order_event(raw)
+            if event is not None:
+                events.append(event)
+        elif channel in POSITION_CHANNELS:
+            events.append(_position_event(raw))
+        elif channel in FILL_CHANNELS:
+            events.append(_fill_event(raw))
     return events
 
 

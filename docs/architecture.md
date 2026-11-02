@@ -9,15 +9,20 @@ that communicate through two kinds of channels:
   PostgreSQL journal *before* delivery, and each consumer has its own queue,
   checkpoint and startup replay.
 
+The strategy config chooses the signal source. The default, the trend portfolio,
+is shown; the 2.0 liquidity sweep (HTF scanner, microstructure engine, sweep
+detector) still runs with `STRATEGY_CONFIG=.../liquidity_sweep.toml`.
+
 ```mermaid
 flowchart LR
   subgraph Market data
-    BWS[Binance WS + REST backfill] --> IQ[(ingest queue)] --> W[QueueWriter<br/>persist, then fan out]
-    W -->|1h, 4h| HTF[HTF level scanner]
-    W -->|1m, 5m| MS[Microstructure engine]
-    W -->|1m, 5m| SP[Signal pipeline<br/>freshness gate]
+    BWS[Binance REST warm-up + 4h WS] --> IQ[(ingest queue)] --> W[QueueWriter<br/>persist, then fan out]
+    W -->|completed 4h| TP[Trend pipeline<br/>CandleHistory]
   end
-  SP --> SD[Sweep detector] --> RS[Risk sizer] --> SQ[(signal queue)]
+  TP --> TS[Trailing-stop manager<br/>ratchet, time stops]
+  TP --> TD[trend_decisions<br/>shared with research] --> BAT[Batch per bar close<br/>rank]
+  BAT --> PR[Portfolio rules<br/>shared with research] --> SQ[(signal queue)]
+  TS --> AD
   SQ --> EE[Execution engine]
   RG{{Risk governor<br/>kill switch, limits, circuit breakers}} -. gates every submit .- EE
   EE --> AD[ExchangeAdapter]
@@ -115,6 +120,29 @@ The legacy `signals.status` column is mirrored for Telegram and the daily summar
 | Stale books, stale signals and late candles never trade | `max_book_age_seconds`, `max_signal_age_seconds`, `candle_is_fresh` |
 | Worst-case daily loss: realised R minus 1R per open trade and per new trade stays within the limit | `daily_loss_budget` rule |
 
+## Trend portfolio (`signals/trend*.py`, `risk/portfolio.py`, `execution/trailing.py`)
+
+At every 4h close, in one task, so the order is fixed:
+
+1. The completed candle joins `CandleHistory`. A candle that is still forming, a
+   duplicate or out of order is refused.
+2. The trailing manager moves each open position's exchange stop to the research
+   rule's level (never looser) and runs time stops.
+3. `signals.trend.trend_decisions`, the same function the backtest uses, evaluates
+   the newest bar.
+4. Decisions wait until every tradable symbol has reported that bar (or a timeout).
+   `risk.portfolio.admit` then ranks them and sizes them on shared, marked-to-market
+   equity in whole contracts. It applies the position, open-risk, correlated-risk,
+   leverage, entries-per-bar and drawdown limits.
+5. Accepted signals carry their planned contracts, trail distance and time stop to
+   the engine.
+6. The governor re-runs the same rules on the current book just before submission.
+   It fails closed.
+
+Candles that arrive late update history but never trade. Every decision is persisted:
+refusals are cancelled signals with a `portfolio:<rule>` reason and a `RISK_DENIED`
+event.
+
 ## Risk governor
 
 `risk/governor.py`:
@@ -124,7 +152,8 @@ The legacy `signals.status` column is mirrored for Telegram and the daily summar
   audited operator action clears it.
 * **Circuit breakers**: in-memory and condition-bound, cleared by the component that
   raised them once the condition recovers: `exchange_stream`, `exchange_auth`,
-  `unresolved_order:<id>`, `orphan_position:<symbol>`, `task_crashed`.
+  `unresolved_order:<id>`, `orphan_position:<symbol>`, `task_crashed`, and
+  `portfolio_drawdown` (trend mode: equity 20% below its peak).
 * **Limits**: daily loss (realised and worst-case budget), trades per day (counted
   at submission), concurrent exposure (any order that may hold exposure), consecutive
   losses, minimum balance.
@@ -137,7 +166,8 @@ The legacy `signals.status` column is mirrored for Telegram and the daily summar
   taxonomy (rejected, ambiguous, auth, unavailable), 10 s request timeouts, lookup
   by client order id. Field mappings marked `VERIFY` must be confirmed on testnet
   before live use.
-* `venues/simulated.py`: deterministic matching engine with a fault plan.
+* `venues/simulated.py`: deterministic matching engine with a fault plan. Stops
+  can be amended (stepped trailing) or trail natively from the mid price.
 * `venues/paper.py`: the simulator driven by live Delta order books, with latency,
   fees, funding, a persisted ledger and restart-safe state.
 

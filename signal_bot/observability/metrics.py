@@ -139,6 +139,38 @@ PROTECTIVE_FAILURES = Counter(
 )
 
 # --- paper account ---------------------------------------------------------
+TRAILING_STOP_UPDATES = Counter(
+    "signalbot_trailing_stop_updates_total",
+    "Trailing-stop amendments by outcome (moved, rejected, unknown, verified_venue_tighter)",
+    ["outcome"],
+    registry=REGISTRY,
+)
+TIME_STOPS = Counter(
+    "signalbot_time_stops_total",
+    "Positions closed by the strategy's time stop",
+    registry=REGISTRY,
+)
+TREND_DECISIONS = Counter(
+    "signalbot_trend_decisions_total",
+    "Trend-breakout decisions by portfolio outcome (accepted or the refusal reason)",
+    ["outcome"],
+    registry=REGISTRY,
+)
+PORTFOLIO_OPEN_RISK = Gauge(
+    "signalbot_portfolio_open_risk_ratio",
+    "Sum of open stop-loss risk as a fraction of equity",
+    registry=REGISTRY,
+)
+PORTFOLIO_CORRELATED_RISK = Gauge(
+    "signalbot_portfolio_correlated_risk_ratio",
+    "Correlation-adjusted open risk sqrt(r'Cr) as a fraction of equity",
+    registry=REGISTRY,
+)
+PORTFOLIO_DRAWDOWN = Gauge(
+    "signalbot_portfolio_drawdown_ratio",
+    "Drawdown of marked-to-market equity from its peak",
+    registry=REGISTRY,
+)
 PAPER_EQUITY = Gauge(
     "signalbot_paper_equity",
     "Mark-to-market equity of the paper account",

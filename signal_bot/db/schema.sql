@@ -1,6 +1,7 @@
 -- Reference SQL schema for the signal bot.
--- Tables are created via SQLAlchemy metadata in production; this file
--- documents the intended schema and can be used for ad-hoc migrations.
+-- Tables are created via SQLAlchemy metadata in production (db/models.py is the source
+-- of truth, including the 2.0 execution tables not repeated here); db/migrate.py adds
+-- columns introduced since and runs on every start.  This file documents the core tables.
 
 CREATE TABLE IF NOT EXISTS instruments (
     symbol VARCHAR(20) PRIMARY KEY,
@@ -84,7 +85,7 @@ CREATE TABLE IF NOT EXISTS signals (
     side VARCHAR(10) NOT NULL CHECK (side IN ('long', 'short')),
     entry NUMERIC(32, 16) NOT NULL,
     stop_loss NUMERIC(32, 16) NOT NULL,
-    take_profit NUMERIC(32, 16) NOT NULL,
+    take_profit NUMERIC(32, 16),  -- NULL for trend signals (trailing stop, no target)
     leverage INTEGER NOT NULL,
     risk_pct NUMERIC(10, 4) NOT NULL,
     account_size_assumed NUMERIC(32, 8) NOT NULL,
@@ -101,7 +102,13 @@ CREATE TABLE IF NOT EXISTS signals (
     delta_basis NUMERIC(16, 8),
     entry_fees_usdt NUMERIC(16, 8),
     slippage_bps NUMERIC(16, 8),
-    cancelled_reason VARCHAR(50)
+    cancelled_reason VARCHAR(50),
+    -- 2.1: strategy intent beyond entry/stop/target
+    strategy VARCHAR(40),
+    trail_distance NUMERIC(32, 16),
+    trail_from TIMESTAMPTZ,
+    time_stop_at TIMESTAMPTZ,
+    planned_contracts NUMERIC(32, 16)
 );
 
 CREATE INDEX IF NOT EXISTS idx_signals_symbol
@@ -143,5 +150,7 @@ CREATE TABLE IF NOT EXISTS risk_state (
     daily_trade_count INTEGER NOT NULL DEFAULT 0,
     consecutive_losses INTEGER NOT NULL DEFAULT 0,
     last_reset_date DATE,
-    current_open_positions INTEGER NOT NULL DEFAULT 0
+    current_open_positions INTEGER NOT NULL DEFAULT 0,
+    peak_equity NUMERIC(32, 8),  -- 2.1: portfolio drawdown is measured from it
+    peak_equity_at TIMESTAMPTZ
 );

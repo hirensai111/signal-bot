@@ -307,9 +307,142 @@ class LiquiditySweepBaseline:
         return raw
 
 
+# ---------------------------------------------------------------------------
+# trend breakout (higher timeframe, exchange-native trailing stop)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TrendBreakout:
+    """Donchian-channel breakout with an ATR stop and a constant-distance trailing stop.
+
+    Long when the close breaks above the highest high of the previous ``entry_lookback``
+    bars (short below the lowest low).  Initial stop ``stop_atr`` x ATR away; the stop
+    then trails the best price by ``trail_atr`` x ATR (distance fixed at entry), with no
+    fixed target.  The trail is *stepped*: it moves once per completed bar, from the
+    highs/lows of bars already closed, which is what the live trailing-stop manager does
+    (an exchange-native trail such as Delta's ``bracket_trail_amount`` moves continuously
+    and is a different exit).  Optional EMA trend filter and breakout-volume filter.
+    The decision rule is ``signals.trend.trend_decisions``, shared with live trading.
+    """
+
+    timeframe: str = "4h"
+    entry_lookback: int = 55
+    atr_n: int = 20
+    stop_atr: float = 2.0
+    trail_atr: float = 3.0
+    trend_ema: int = 0  # 0 = off; otherwise only trade in the EMA's direction
+    breakout_volume_mult: float = 0.0  # 0 = off; breakout bar volume >= mult x 20-bar mean
+    allow_short: bool = True
+    max_hold_bars: int = 180
+    min_stop_bps: float = 0.0
+    name: str = "trend_breakout"
+    version: str = "0.1.0"
+
+    def params(self) -> dict[str, Any]:
+        return {
+            k: getattr(self, k)
+            for k in (
+                "timeframe",
+                "entry_lookback",
+                "atr_n",
+                "stop_atr",
+                "trail_atr",
+                "trend_ema",
+                "breakout_volume_mult",
+                "allow_short",
+                "max_hold_bars",
+                "min_stop_bps",
+            )
+        }
+
+    def generate(self, data: Dataset) -> list[Intent]:
+        from signal_bot.research.fill_model import NO_TARGET
+        from signal_bot.signals.trend import TrendParams, trend_decisions
+
+        # The decision rule lives in signals/trend.py so live trading runs the same code.
+        decisions = trend_decisions(
+            frame_for(data, self.timeframe), TrendParams.from_mapping(self.params())
+        )
+        return [
+            Intent(
+                d.bar,
+                d.side,
+                d.entry,
+                d.stop,
+                NO_TARGET if d.side == "long" else -NO_TARGET,
+                d.max_hold_bars,
+                "breakout",
+                d.trail_distance,
+            )
+            for d in decisions
+        ]
+
+
+# ---------------------------------------------------------------------------
+# liquidity sweep v2: the live signals with cost-aware trade management
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LiquiditySweepV2:
+    """The production sweep signals with the management the v1 diagnosis called for.
+
+    v1 lost because ~80% of trades were stopped out against targets 3.6-4.8R away, and
+    a third of stops were tighter than ~2.5x round-trip costs.  v2 keeps the live entry
+    and stop, skips setups whose stop is under ``min_stop_bps``, and replaces the
+    level-based target with a fixed ``target_r`` (or a trailing stop when
+    ``trail_r`` > 0).
+    """
+
+    timeframe: str = "5m"
+    min_stop_bps: float = 40.0
+    target_r: float = 2.0
+    trail_r: float = 0.0
+    max_hold_days: int = 7
+    cache_dir: str = "data/cache"
+    name: str = "liquidity_sweep_v2"
+    version: str = "0.1.0"
+
+    def params(self) -> dict[str, Any]:
+        return {
+            "timeframe": self.timeframe,
+            "entry_and_stop": "live sweep detector (unchanged)",
+            "min_stop_bps": self.min_stop_bps,
+            "target_r": self.target_r,
+            "trail_r": self.trail_r,
+            "max_hold_days": self.max_hold_days,
+        }
+
+    def generate(self, data: Dataset) -> list[Intent]:
+        from signal_bot.research.fill_model import NO_TARGET
+
+        base = LiquiditySweepBaseline(
+            timeframe=self.timeframe, max_hold_days=self.max_hold_days, cache_dir=self.cache_dir
+        )
+        out = []
+        for it in base.generate(data):
+            risk = abs(it.entry - it.stop)
+            if risk <= 0 or risk / it.entry * 1e4 < self.min_stop_bps:
+                continue
+            sign = 1 if it.side == "long" else -1
+            if self.trail_r > 0:
+                tp = NO_TARGET * sign
+                trail = self.trail_r * risk
+            else:
+                tp = it.entry + sign * self.target_r * risk
+                trail = None
+            out.append(
+                Intent(it.bar, it.side, it.entry, it.stop, tp, it.max_hold_bars, "sweep_v2", trail)
+            )
+        return out
+
+
 REGISTRY = {
     "exhaustion_reversion": ExhaustionReversion,
     "liquidity_sweep": LiquiditySweepBaseline,
+    "liquidity_sweep_v2": LiquiditySweepV2,
+    "trend_breakout": TrendBreakout,
 }
 
 

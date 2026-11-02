@@ -41,6 +41,8 @@ class StatusService:
     replay_counts: dict[str, int] = field(default_factory=dict)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     max_candle_lag_seconds: float = 90.0
+    trend: Any = None  # TrendPipeline
+    trailing: Any = None  # TrailingStopManager
 
     # ------------------------------------------------------------------
     def market_data(self) -> dict[str, Any]:
@@ -55,9 +57,13 @@ class StatusService:
         comps = []
         md = self.market_data()
         if self.fanout is not None:
-            lags = [ages.get("1m") for ages in md.values() if ages.get("1m") is not None]
+            # The trend portfolio streams only 4h candles: judge freshness on that interval.
+            interval, period = ("4h", 4 * 3600) if self.trend is not None else ("1m", 60)
+            lags = [ages.get(interval) for ages in md.values() if ages.get(interval) is not None]
             worst = max(lags) if lags else None
-            ok = worst is not None and worst <= self.max_candle_lag_seconds
+            # A candle's age since close grows to one full period before the next arrives.
+            allowed = self.max_candle_lag_seconds + (period - 60 if interval != "1m" else 0)
+            ok = worst is not None and worst <= allowed
             error = getattr(self.ingestor, "last_error", None)
             if error:
                 state, detail = "degraded", f"cannot connect: {error}"
@@ -65,7 +71,7 @@ class StatusService:
                 state, detail = "starting", "no candles yet"
             else:
                 state = "healthy" if ok else "degraded"
-                detail = f"newest 1m candle closed {worst:.0f}s ago"
+                detail = f"newest {interval} candle closed {worst:.0f}s ago"
             comps.append({"name": "Market data stream", "status": state, "detail": detail})
         if self.stream is not None:
             connected = bool(getattr(self.stream, "connected", False))
@@ -157,6 +163,49 @@ class StatusService:
             for o in rows
         ]
 
+    async def protection(self) -> list[dict[str, Any]] | dict:
+        """Open positions' stops: mode, initial and current stop, trail, time stop."""
+        from signal_bot.execution.orders import OrderState
+
+        try:
+            rows = await self.order_store.in_states(
+                [OrderState.FILLED, OrderState.PARTIALLY_FILLED]
+            )
+        except Exception as exc:
+            return {"error": str(exc)}
+        out = []
+        for o in rows:
+            target = None
+            if self.trailing is not None and o.trail_mode == "stepped":
+                try:
+                    target = self.trailing.target_stop(o)[0]
+                except Exception:
+                    target = None
+            out.append(
+                {
+                    "client_order_id": o.client_order_id,
+                    "symbol": o.symbol,
+                    "side": o.side,
+                    "size": str(o.filled_size),
+                    "entry": None if o.avg_fill_price is None else str(o.avg_fill_price),
+                    "stop_mode": {
+                        "stepped": "trailing (each 4h close)",
+                        "native": "trailing (venue)",
+                    }.get(o.trail_mode, "fixed"),
+                    "initial_stop": str(o.stop_loss_price),
+                    "current_stop": None
+                    if o.current_stop_price is None
+                    else str(o.current_stop_price),
+                    "next_stop": None if target is None else str(target),
+                    "trail_distance": None if o.trail_distance is None else str(o.trail_distance),
+                    "best_reference_price": None if o.best_price is None else str(o.best_price),
+                    "stop_updated_at": _iso(o.stop_updated_at),
+                    "time_stop_at": _iso(o.time_stop_at),
+                    "protective": o.protective_status,
+                }
+            )
+        return out
+
     async def audit(self, limit: int = 20) -> list[dict[str, Any]] | dict:
         try:
             async with self.session_factory() as session:
@@ -215,6 +264,10 @@ class StatusService:
             "replay": self.replay_counts,
             "market_data_age_seconds": self.market_data(),
             "audit": await self.audit(),
+            "protection": await self.protection(),
+            "trend": self.trend.status() if self.trend is not None else None,
+            "portfolio": self.trend.portfolio.last_summary if self.trend is not None else None,
+            "trailing_last_sync": getattr(self.trailing, "last_sync", None),
         }
 
     def readiness(self) -> tuple[bool, list[str]]:

@@ -76,6 +76,12 @@ class Intent:
     take_profit: float
     max_hold_bars: int = 48
     tag: str = ""
+    # Constant-distance trailing stop in price units (Delta's bracket_trail_amount):
+    # the stop follows the best price since entry at this distance and never loosens.
+    trail_distance: float | None = None
+
+
+NO_TARGET = float("inf")  # take_profit for a long with no fixed target (use -inf for shorts)
 
 
 @dataclass
@@ -104,6 +110,7 @@ class Trade:
     realized_r: float = 0.0
     equity_after: float = 0.0
     tag: str = ""
+    trail_distance: float | None = None
     filled: bool = False
     partial: bool = False
     extra: dict = field(default_factory=dict)
@@ -116,6 +123,197 @@ def _impact_bps(cost: CostModel, notional: float, bar_notional: float, range_bps
     return cost.impact_coef * range_bps * math.sqrt(min(1.0, max(notional, 0.0) / bar_notional))
 
 
+@dataclass
+class _Bars:
+    """Column arrays of one symbol's bar frame (shared by the single-symbol and portfolio paths)."""
+
+    o: np.ndarray
+    h: np.ndarray
+    lo: np.ndarray
+    c: np.ndarray
+    qv: np.ndarray
+    rng_bps: np.ndarray
+    idx: pd.DatetimeIndex
+
+    @classmethod
+    def of(cls, frame: pd.DataFrame) -> _Bars:
+        o = frame["open"].to_numpy(float)
+        h = frame["high"].to_numpy(float)
+        lo = frame["low"].to_numpy(float)
+        c = frame["close"].to_numpy(float)
+        qv = frame["quote_volume"].to_numpy(float)
+        rng_bps = np.where(c > 0, (h - lo) / np.where(c > 0, c, 1) * 1e4, 0.0)
+        return cls(o, h, lo, c, qv, rng_bps, frame.index)
+
+    def __len__(self) -> int:
+        return len(self.o)
+
+
+@dataclass
+class OpenTrade:
+    """A filled position being stepped bar by bar through the exit rules."""
+
+    trade: Trade
+    intent: Intent
+    long: bool
+    sign: float
+    j: int  # entry bar
+    last: int  # bar whose close is the time stop
+    qty: float  # requested (R denominator)
+    fill_qty: float
+    entry_px: float
+    risk_per_unit: float
+    stop: float
+    best: float
+    fees: float
+    spread_cost: float
+    impact_cost: float
+    funding: float = 0.0
+    k: int = -1  # last bar processed
+    closed: bool = False
+
+    def unrealized(self, price: float) -> float:
+        return self.sign * (price - self.entry_px) * self.fill_qty
+
+
+def open_trade(
+    bars: _Bars, i: int, it: Intent, qty: float, cost: CostModel, symbol: str = ""
+) -> tuple[Trade, OpenTrade | None]:
+    """Execute *it* (decided at the close of bar *i*) at bar ``i + 1``.
+
+    Returns the trade record and, if anything filled, the open position.
+    """
+    o, idx = bars.o, bars.idx
+    n = len(bars)
+    long = it.side == "long"
+    sign = 1.0 if long else -1.0
+    risk_per_unit = abs(it.entry - it.stop)
+    trade = Trade(
+        symbol=symbol,
+        side=it.side,
+        signal_time=idx[i],
+        entry_time=None,
+        exit_time=None,
+        intended_entry=it.entry,
+        entry_price=None,
+        stop=it.stop,
+        take_profit=it.take_profit,
+        tag=it.tag,
+        trail_distance=it.trail_distance,
+    )
+    if risk_per_unit <= 0:
+        trade.exit_reason = "invalid"
+        return trade, None
+    trade.qty_requested = qty
+    j = i + 1
+    limit = it.entry * (1 + sign * cost.max_entry_slippage_bps / 1e4)
+    if (long and o[j] > limit) or (not long and o[j] < limit):
+        trade.exit_reason = "no_fill_gap"
+        return trade, None
+    cap_qty = cost.max_participation * bars.qv[j] / o[j] if o[j] > 0 else 0.0
+    fill_qty = min(qty, cap_qty)
+    if fill_qty <= 0:
+        trade.exit_reason = "no_fill_liquidity"
+        return trade, None
+    notional = fill_qty * o[j]
+    spread = cost.half_spread_bps / 1e4 * o[j]
+    impact = _impact_bps(cost, notional, bars.qv[j], bars.rng_bps[j]) / 1e4 * o[j]
+    entry_px = o[j] + sign * (spread + impact)
+    trade.entry_time = idx[j]
+    trade.entry_price = entry_px
+    trade.qty_filled = fill_qty
+    trade.partial = fill_qty < qty * 0.999
+    trade.filled = True
+    trade.risk_amount = fill_qty * risk_per_unit
+    ot = OpenTrade(
+        trade=trade,
+        intent=it,
+        long=long,
+        sign=sign,
+        j=j,
+        last=min(n - 1, j + it.max_hold_bars),
+        qty=qty,
+        fill_qty=fill_qty,
+        entry_px=entry_px,
+        risk_per_unit=risk_per_unit,
+        stop=it.stop,
+        best=o[j],  # most favourable price seen since entry (through the previous bar)
+        fees=entry_px * fill_qty * cost.taker_fee,
+        spread_cost=spread * fill_qty,
+        impact_cost=impact * fill_qty,
+    )
+    return trade, ot
+
+
+def step_trade(ot: OpenTrade, bars: _Bars, k: int, cost: CostModel) -> bool:
+    """Process bar *k* for an open trade.  Returns ``True`` once the trade has closed."""
+    o, h, lo, idx = bars.o, bars.h, bars.lo, bars.idx
+    it, long, sign, j = ot.intent, ot.long, ot.sign, ot.j
+    ot.k = k
+    if k > j and _crosses_funding(idx[k - 1], idx[k]):
+        ot.funding -= sign * ot.fill_qty * o[k] * cost.funding_rate_8h
+    if it.trail_distance and k > j:
+        # Stepped trail: updated once per bar from extremes through bar k-1.
+        ot.best = max(ot.best, h[k - 1]) if long else min(ot.best, lo[k - 1])
+        trailed = ot.best - it.trail_distance if long else ot.best + it.trail_distance
+        ot.stop = max(ot.stop, trailed) if long else min(ot.stop, trailed)
+    stop = ot.stop
+    stop_hit = (lo[k] <= stop) if long else (h[k] >= stop)
+    tp_hit = (h[k] >= it.take_profit) if long else (lo[k] <= it.take_profit)
+    if stop_hit:
+        gap = (o[k] <= stop) if long else (o[k] >= stop)
+        base = o[k] if (gap and k > j) else stop
+        if k == j and ((long and o[k] <= stop) or (not long and o[k] >= stop)):
+            base = o[k]
+        sp = cost.half_spread_bps / 1e4 * base
+        im = _impact_bps(cost, ot.fill_qty * base, bars.qv[k], bars.rng_bps[k]) / 1e4 * base
+        exit_px = base - sign * (sp + im)
+        ot.fees += exit_px * ot.fill_qty * cost.taker_fee
+        ot.spread_cost += sp * ot.fill_qty
+        ot.impact_cost += im * ot.fill_qty
+        _close(ot, bars, k, exit_px, "trail" if stop != it.stop else "sl")
+        return True
+    if tp_hit:
+        through = (o[k] >= it.take_profit) if long else (o[k] <= it.take_profit)
+        exit_px = o[k] if (through and k > j) else it.take_profit
+        ot.fees += exit_px * ot.fill_qty * cost.maker_fee
+        _close(ot, bars, k, exit_px, "tp")
+        return True
+    if k >= ot.last:
+        base = bars.c[k]
+        sp = cost.half_spread_bps / 1e4 * base
+        im = _impact_bps(cost, ot.fill_qty * base, bars.qv[k], bars.rng_bps[k]) / 1e4 * base
+        exit_px = base - sign * (sp + im)
+        ot.fees += exit_px * ot.fill_qty * cost.taker_fee
+        ot.spread_cost += sp * ot.fill_qty
+        ot.impact_cost += im * ot.fill_qty
+        _close(ot, bars, k, exit_px, "time")
+        return True
+    return False
+
+
+def _close(ot: OpenTrade, bars: _Bars, k: int, exit_px: float, reason: str) -> None:
+    it, trade = ot.intent, ot.trade
+    gross = ot.sign * (exit_px - ot.entry_px) * ot.fill_qty
+    net = gross - ot.fees + ot.funding
+    level = (
+        ot.stop if reason in ("sl", "trail") else it.take_profit if reason == "tp" else bars.c[k]
+    )
+    trade.exit_time = bars.idx[k]
+    trade.exit_price = exit_px
+    trade.exit_reason = reason
+    trade.fees = ot.fees
+    trade.spread_cost = ot.spread_cost
+    trade.impact_cost = ot.impact_cost
+    trade.funding = ot.funding
+    trade.gross_pnl = gross
+    trade.net_pnl = net
+    trade.signal_r = ot.sign * (level - it.entry) / ot.risk_per_unit
+    trade.realized_r = net / (ot.qty * ot.risk_per_unit)
+    ot.k = k
+    ot.closed = True
+
+
 def simulate(
     frame: pd.DataFrame,
     intents: list[Intent],
@@ -124,14 +322,8 @@ def simulate(
     symbol: str = "",
 ) -> tuple[list[Trade], pd.Series]:
     """Run intents through the fill model.  One position per symbol at a time."""
-    o = frame["open"].to_numpy(float)
-    h = frame["high"].to_numpy(float)
-    lo = frame["low"].to_numpy(float)
-    c = frame["close"].to_numpy(float)
-    qv = frame["quote_volume"].to_numpy(float)
-    rng_bps = np.where(c > 0, (h - lo) / np.where(c > 0, c, 1) * 1e4, 0.0)
-    idx = frame.index
-    n = len(frame)
+    bars = _Bars.of(frame)
+    n = len(bars)
     equity = sizing.initial_equity
     curve = np.full(n, np.nan)
     trades: list[Trade] = []
@@ -145,122 +337,31 @@ def simulate(
         if it is None or i <= busy_until or i + 1 >= n:
             curve[i] = equity
             continue
-        long = it.side == "long"
-        sign = 1.0 if long else -1.0
         risk_per_unit = abs(it.entry - it.stop)
-        trade = Trade(
-            symbol=symbol,
-            side=it.side,
-            signal_time=idx[i],
-            entry_time=None,
-            exit_time=None,
-            intended_entry=it.entry,
-            entry_price=None,
-            stop=it.stop,
-            take_profit=it.take_profit,
-            tag=it.tag,
+        qty = (
+            min(
+                equity * sizing.risk_fraction / risk_per_unit,
+                equity * sizing.max_leverage / it.entry,
+            )
+            if risk_per_unit > 0
+            else 0.0
         )
-        if risk_per_unit <= 0:
-            trade.exit_reason = "invalid"
-            trades.append(trade)
-            curve[i] = equity
-            continue
-
-        risk_amount = equity * sizing.risk_fraction
-        qty = min(risk_amount / risk_per_unit, equity * sizing.max_leverage / it.entry)
-        trade.qty_requested = qty
-        j = i + 1
-        limit = it.entry * (1 + sign * cost.max_entry_slippage_bps / 1e4)
-        if (long and o[j] > limit) or (not long and o[j] < limit):
-            trade.exit_reason = "no_fill_gap"
-            trades.append(trade)
-            curve[i] = equity
-            continue
-        cap_qty = cost.max_participation * qv[j] / o[j] if o[j] > 0 else 0.0
-        fill_qty = min(qty, cap_qty)
-        if fill_qty <= 0:
-            trade.exit_reason = "no_fill_liquidity"
-            trades.append(trade)
-            curve[i] = equity
-            continue
-        notional = fill_qty * o[j]
-        spread = cost.half_spread_bps / 1e4 * o[j]
-        impact = _impact_bps(cost, notional, qv[j], rng_bps[j]) / 1e4 * o[j]
-        entry_px = o[j] + sign * (spread + impact)
-        trade.entry_time = idx[j]
-        trade.entry_price = entry_px
-        trade.qty_filled = fill_qty
-        trade.partial = fill_qty < qty * 0.999
-        trade.filled = True
-        trade.risk_amount = fill_qty * risk_per_unit
-        fees = entry_px * fill_qty * cost.taker_fee
-        spread_cost = spread * fill_qty
-        impact_cost = impact * fill_qty
-
-        exit_px = None
-        reason = "time"
-        k = j
-        last = min(n - 1, j + it.max_hold_bars)
-        funding = 0.0
-        while k <= last:
-            if k > j and _crosses_funding(idx[k - 1], idx[k]):
-                funding -= sign * fill_qty * o[k] * cost.funding_rate_8h
-            stop_hit = (lo[k] <= it.stop) if long else (h[k] >= it.stop)
-            tp_hit = (h[k] >= it.take_profit) if long else (lo[k] <= it.take_profit)
-            if stop_hit:
-                gap = (o[k] <= it.stop) if long else (o[k] >= it.stop)
-                base = o[k] if (gap and k > j) else it.stop
-                if k == j and ((long and o[k] <= it.stop) or (not long and o[k] >= it.stop)):
-                    base = o[k]
-                sp = cost.half_spread_bps / 1e4 * base
-                im = _impact_bps(cost, fill_qty * base, qv[k], rng_bps[k]) / 1e4 * base
-                exit_px = base - sign * (sp + im)
-                fees += exit_px * fill_qty * cost.taker_fee
-                spread_cost += sp * fill_qty
-                impact_cost += im * fill_qty
-                reason = "sl"
-                break
-            if tp_hit:
-                through = (o[k] >= it.take_profit) if long else (o[k] <= it.take_profit)
-                exit_px = o[k] if (through and k > j) else it.take_profit
-                fees += exit_px * fill_qty * cost.maker_fee
-                reason = "tp"
-                break
-            k += 1
-        if exit_px is None:
-            k = last
-            base = c[k]
-            sp = cost.half_spread_bps / 1e4 * base
-            im = _impact_bps(cost, fill_qty * base, qv[k], rng_bps[k]) / 1e4 * base
-            exit_px = base - sign * (sp + im)
-            fees += exit_px * fill_qty * cost.taker_fee
-            spread_cost += sp * fill_qty
-            impact_cost += im * fill_qty
-            reason = "time"
-
-        equity_before = equity
-        gross = sign * (exit_px - entry_px) * fill_qty
-        net = gross - fees + funding
-        level = it.stop if reason == "sl" else it.take_profit if reason == "tp" else c[k]
-        trade.exit_time = idx[k]
-        trade.exit_price = exit_px
-        trade.exit_reason = reason
-        trade.fees = fees
-        trade.spread_cost = spread_cost
-        trade.impact_cost = impact_cost
-        trade.funding = funding
-        trade.gross_pnl = gross
-        trade.net_pnl = net
-        trade.signal_r = sign * (level - it.entry) / risk_per_unit
-        trade.realized_r = net / (qty * risk_per_unit)
-        equity += net
-        trade.equity_after = equity
+        trade, ot = open_trade(bars, i, it, qty, cost, symbol)
         trades.append(trade)
+        if ot is None:
+            curve[i] = equity
+            continue
+        k = ot.j
+        while not step_trade(ot, bars, k, cost):
+            k += 1
+        equity_before = equity
+        equity += trade.net_pnl
+        trade.equity_after = equity
         curve[i:k] = equity_before  # realised-equity curve: PnL books on exit
         curve[k] = equity
         busy_until = k
 
-    series = pd.Series(curve, index=idx).ffill().fillna(sizing.initial_equity)
+    series = pd.Series(curve, index=bars.idx).ffill().fillna(sizing.initial_equity)
     return trades, series
 
 
