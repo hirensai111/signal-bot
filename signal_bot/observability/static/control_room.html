@@ -339,13 +339,42 @@ td.r, th.r { text-align: right; }
         <h3 id="positions-title">Positions on the venue</h3>
         <p class="hint">From the exchange stream, so this stays current even if the database is down.</p>
         <div class="table-scroll"><table>
-          <thead><tr><th>Symbol</th><th class="r">Size</th><th class="r">Entry</th><th>Stop</th><th>Updated</th></tr></thead>
+          <thead><tr><th>Symbol</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Stop</th><th>Protection</th><th>Updated</th></tr></thead>
           <tbody id="positions"></tbody>
         </table></div>
       </section>
       <section class="panel" aria-labelledby="account-title">
         <h3 id="account-title">Account ledger</h3>
         <dl class="kv" id="account"></dl>
+      </section>
+    </div>
+
+    <section class="panel full" aria-labelledby="protection-title">
+      <h3 id="protection-title">Stops and exits</h3>
+      <p class="hint">Trailing stops move once per completed 4h bar, never looser, and are resting orders on the exchange. "Next stop" is where the strategy's rule puts the stop now.</p>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Symbol</th><th>Side</th><th>Stop type</th><th class="r">Initial stop</th><th class="r">Stop on exchange</th><th class="r">Next stop</th><th class="r">Trail</th><th class="r">Best price</th><th>Last moved</th><th>Time stop</th></tr></thead>
+        <tbody id="protection"></tbody>
+      </table></div>
+    </section>
+
+    <div class="full two">
+      <section class="panel" aria-labelledby="portfolio-title">
+        <h3 id="portfolio-title">Portfolio risk</h3>
+        <p class="hint">One account shared by every symbol. New entries are refused when a limit would be crossed.</p>
+        <dl class="kv" id="portfolio"></dl>
+      </section>
+      <section class="panel" aria-labelledby="trend-title">
+        <h3 id="trend-title">Trend signals</h3>
+        <p class="hint" id="trend-hint">Decided on completed 4h candles with the research code.</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Symbol</th><th>Side</th><th class="r">Strength</th><th>Decision</th><th class="r">Contracts</th></tr></thead>
+          <tbody id="trend-batch"></tbody>
+        </table></div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Symbol</th><th>Tradable</th><th class="r">4h bars</th><th>Last bar</th></tr></thead>
+          <tbody id="trend-universe"></tbody>
+        </table></div>
       </section>
     </div>
 
@@ -663,9 +692,59 @@ td.r, th.r { text-align: right; }
       p.symbol,
       { text: fmtNum(p.size, 4), cls: "r num" },
       { text: fmtNum(p.entry_price, 2), cls: "r num" },
-      p.has_stop_loss ? pill("Stop on venue", "good") : pill("No stop", "bad"),
+      { text: p.stop_loss_price ? fmtNum(p.stop_loss_price, 4) : "–", cls: "r num" },
+      !p.has_stop_loss ? pill("No stop", "bad") : p.trail_amount ? pill("Venue trailing stop", "good") : pill("Stop on venue", "good"),
       fmtTime(p.updated_at || p.as_of),
-    ])), "No open positions.", 5);
+    ])), "No open positions.", 6);
+
+    const prot = Array.isArray(s.protection) ? s.protection : [];
+    fill($("protection"), prot.map((o) => {
+      const behind = o.next_stop && o.current_stop && Number(o.next_stop) !== Number(o.current_stop);
+      return row([
+        o.symbol, o.side === "buy" ? "Long" : "Short",
+        o.stop_mode === "fixed" ? sentence("fixed") : pill(sentence(o.stop_mode), "info"),
+        { text: fmtNum(o.initial_stop, 4), cls: "r num" },
+        { text: fmtNum(o.current_stop, 4), cls: "r num" },
+        behind ? pill(fmtNum(o.next_stop, 4) + " (pending)", "warn") : { text: o.next_stop ? fmtNum(o.next_stop, 4) : "–", cls: "r num" },
+        { text: o.trail_distance ? fmtNum(o.trail_distance, 4) : "–", cls: "r num" },
+        { text: o.best_reference_price ? fmtNum(o.best_reference_price, 4) : "–", cls: "r num" },
+        fmtTime(o.stop_updated_at), fmtTime(o.time_stop_at),
+      ]);
+    }), Array.isArray(s.protection) ? "No open positions." : `Unavailable: ${s.protection && s.protection.error}`, 10);
+
+    const pf = $("portfolio");
+    pf.replaceChildren();
+    const port = s.portfolio;
+    const lim = (port && port.limits) || {};
+    const pct = (v) => v == null ? "–" : `${fmtNum(v, 2)}%`;
+    const pairs2 = port ? [
+      ["Equity (marked to market)", fmtMoney(port.equity)],
+      ["Peak equity", fmtMoney(port.peak_equity)],
+      ["Drawdown", `${pct(port.drawdown_pct)} (risk halves at ${pct(lim.drawdown_reduce * 100)}, entries stop at ${pct(lim.drawdown_halt * 100)})`],
+      ["Open positions", `${port.positions} of ${lim.max_positions}`],
+      ["Open risk to stops", `${pct(port.open_risk_pct)} of ${pct(lim.max_open_risk * 100)}`],
+      ["Correlation-adjusted risk", `${pct(port.correlated_risk_pct)} of ${pct(lim.max_correlated_risk * 100)}`],
+      ["Gross leverage", `${fmtNum(port.gross_leverage, 2)}x of ${fmtNum(lim.max_gross_leverage, 1)}x`],
+      ["Risk per trade", `${pct(lim.risk_per_trade * 100)}${port.risk_scaled ? " (halved: in drawdown)" : ""}`],
+      ["New entries", port.entries_allowed ? "Allowed" : "Stopped: drawdown limit"],
+    ] : [["Portfolio", "Not running (strategy is not the trend portfolio)"]];
+    for (const [k, v] of pairs2) { pf.appendChild(el("dt", k)); pf.appendChild(el("dd", v)); }
+
+    const trend = s.trend;
+    const batch = (trend && trend.last_batch) || null;
+    $("trend-hint").textContent = trend
+      ? (batch ? `Last decision batch at the ${fmtTime(batch.bar_close)} close (${batch.symbols_reported.length} symbols reported).` : "No breakout decisions yet since start.")
+      : "Trend pipeline not running.";
+    fill($("trend-batch"), ((batch && batch.decisions) || []).map((d) => row([
+      d.symbol, d.side === "long" ? "Long" : "Short", { text: fmtNum(d.strength, 2), cls: "r num" },
+      d.accepted ? pill("Taken", "good") : pill(sentence(d.reason), "warn"),
+      { text: d.accepted ? fmtNum(d.contracts, 0) : "–", cls: "r num" },
+    ])), "No decisions in the last batch.", 5);
+    fill($("trend-universe"), ((trend && trend.universe) || []).map((u) => row([
+      u.symbol,
+      u.tradable ? (u.ready ? pill("Ready", "good") : pill("Warming up", "warn")) : pill("Not on venue", "bad"),
+      { text: fmtNum(u.bars, 0), cls: "r num" }, u.warmup_error ? `Warm-up failed: ${u.warmup_error}` : fmtTime(u.last_bar),
+    ])), "No symbols.", 4);
 
     const orders = Array.isArray(s.orders) ? s.orders : [];
     const ordersEmpty = Array.isArray(s.orders) ? "No orders yet. They appear here as signals are executed." : `Orders unavailable: ${s.orders && s.orders.error}`;

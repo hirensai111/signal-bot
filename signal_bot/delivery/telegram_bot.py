@@ -89,7 +89,6 @@ class TelegramNotifier:
         side_emoji = "🟢" if signal.side == "long" else "🔴"
         entry_f = float(signal.entry)
         stop_f = float(signal.stop_loss)
-        tp_f = float(signal.take_profit)
 
         stop_pct = (stop_f - entry_f) / entry_f * 100
         if signal.side == "long":
@@ -97,25 +96,33 @@ class TelegramNotifier:
         else:
             stop_pct = abs(stop_pct)
 
-        tp_pct = (tp_f - entry_f) / entry_f * 100
-        if signal.side == "long":
-            tp_pct = abs(tp_pct)
-        else:
-            tp_pct = -abs(tp_pct)
-
-        rr = abs(tp_pct / stop_pct) if stop_pct != 0 else 0
-
         lines = [
             f"{side_emoji} {signal.side.upper()}  {signal.symbol}  ({signal.est_hold_minutes}m)",
             "",
             f"Entry:    {signal.entry}",
             f"Stop:     {signal.stop_loss}   ({stop_pct:+.2f}%)",
-            f"Target:   {signal.take_profit}   ({tp_pct:+.2f}%)",
+        ]
+        if signal.take_profit is not None:
+            tp_f = float(signal.take_profit)
+            tp_pct = (tp_f - entry_f) / entry_f * 100
+            tp_pct = abs(tp_pct) if signal.side == "long" else -abs(tp_pct)
+            rr = abs(tp_pct / stop_pct) if stop_pct != 0 else 0
+            lines.append(f"Target:   {signal.take_profit}   ({tp_pct:+.2f}%)")
+        else:
+            rr = None
+            lines.append("Target:   none (trailing stop)")
+        if getattr(signal, "trail_distance", None):
+            trail_pct = float(signal.trail_distance) / entry_f * 100
+            lines.append(
+                f"Trail:    {signal.trail_distance}   ({trail_pct:.2f}%, moves each 4h close)"
+            )
+        lines += [
             f"Leverage: {signal.leverage}x",
             f"Risk:     {signal.risk_pct}% of account",
-            f"R:R:      {rr:.2f}",
-            f"Hold:     ~{signal.est_hold_minutes} min",
         ]
+        if rr is not None:
+            lines.append(f"R:R:      {rr:.2f}")
+        lines.append(f"Hold:     ~{signal.est_hold_minutes} min")
 
         if signal.pattern_features:
             lines.append("")

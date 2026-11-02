@@ -318,8 +318,12 @@ class TrendBreakout:
 
     Long when the close breaks above the highest high of the previous ``entry_lookback``
     bars (short below the lowest low).  Initial stop ``stop_atr`` x ATR away; the stop
-    then trails the best price by ``trail_atr`` x ATR (fixed at entry, which is exactly
-    Delta's ``bracket_trail_amount``), with no fixed target.  Optional EMA trend filter.
+    then trails the best price by ``trail_atr`` x ATR (distance fixed at entry), with no
+    fixed target.  The trail is *stepped*: it moves once per completed bar, from the
+    highs/lows of bars already closed, which is what the live trailing-stop manager does
+    (an exchange-native trail such as Delta's ``bracket_trail_amount`` moves continuously
+    and is a different exit).  Optional EMA trend filter and breakout-volume filter.
+    The decision rule is ``signals.trend.trend_decisions``, shared with live trading.
     """
 
     timeframe: str = "4h"
@@ -354,59 +358,25 @@ class TrendBreakout:
 
     def generate(self, data: Dataset) -> list[Intent]:
         from signal_bot.research.fill_model import NO_TARGET
+        from signal_bot.signals.trend import TrendParams, trend_decisions
 
-        f = frame_for(data, self.timeframe)
-        a = atr(f, self.atr_n).to_numpy()
-        h, lo, c = (f[k].to_numpy(float) for k in ("high", "low", "close"))
-        upper = f["high"].rolling(self.entry_lookback).max().shift(1).to_numpy()
-        lower = f["low"].rolling(self.entry_lookback).min().shift(1).to_numpy()
-        ema = (
-            f["close"].ewm(span=self.trend_ema, adjust=False).mean().to_numpy()
-            if self.trend_ema
-            else None
+        # The decision rule lives in signals/trend.py so live trading runs the same code.
+        decisions = trend_decisions(
+            frame_for(data, self.timeframe), TrendParams.from_mapping(self.params())
         )
-        vol = f["volume"].to_numpy(float)
-        vol_mean = f["volume"].rolling(20).mean().shift(1).to_numpy()
-        intents: list[Intent] = []
-        for i in range(self.entry_lookback + 1, len(f)):
-            if not (np.isfinite(a[i]) and np.isfinite(upper[i]) and np.isfinite(lower[i])):
-                continue
-            if self.breakout_volume_mult and not (
-                np.isfinite(vol_mean[i]) and vol[i] >= self.breakout_volume_mult * vol_mean[i]
-            ):
-                continue
-            risk = self.stop_atr * a[i]
-            if risk <= 0 or risk / c[i] * 1e4 < self.min_stop_bps:
-                continue
-            up_ok = ema is None or c[i] > ema[i]
-            down_ok = ema is None or c[i] < ema[i]
-            if c[i] > upper[i] and up_ok:
-                intents.append(
-                    Intent(
-                        i,
-                        "long",
-                        c[i],
-                        c[i] - risk,
-                        NO_TARGET,
-                        self.max_hold_bars,
-                        "breakout",
-                        self.trail_atr * a[i],
-                    )
-                )
-            elif self.allow_short and c[i] < lower[i] and down_ok:
-                intents.append(
-                    Intent(
-                        i,
-                        "short",
-                        c[i],
-                        c[i] + risk,
-                        -NO_TARGET,
-                        self.max_hold_bars,
-                        "breakout",
-                        self.trail_atr * a[i],
-                    )
-                )
-        return intents
+        return [
+            Intent(
+                d.bar,
+                d.side,
+                d.entry,
+                d.stop,
+                NO_TARGET if d.side == "long" else -NO_TARGET,
+                d.max_hold_bars,
+                "breakout",
+                d.trail_distance,
+            )
+            for d in decisions
+        ]
 
 
 # ---------------------------------------------------------------------------

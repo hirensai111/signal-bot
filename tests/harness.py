@@ -95,6 +95,7 @@ class Harness:
         db_name: str = "harness.db",
         db_url: str | None = None,
         reset_db: bool = True,
+        clock_start: datetime | None = None,
     ) -> Harness:
         h = cls()
         h.tmp_path = tmp_path
@@ -108,7 +109,7 @@ class Harness:
         raw = async_sessionmaker(h.db_engine, class_=AsyncSession, expire_on_commit=False)
         h.raw_factory = raw
         h.factory = FlakySessionFactory(raw)
-        h.clock = ManualClock(datetime.now(timezone.utc).replace(microsecond=0))
+        h.clock = ManualClock(clock_start or datetime.now(timezone.utc).replace(microsecond=0))
         h.journal = SqlEventJournal(h.factory) if sql_journal else InMemoryJournal()
         h.bus = EventBus(h.journal)
         h.venue = SimulatedVenue(

@@ -120,6 +120,10 @@ def parse_order(raw: dict[str, Any]) -> ExchangeOrder:
         fees=_dec(raw.get("paid_commission") or raw.get("commission")),
         reason=raw.get("cancellation_reason") or raw.get("reason"),
         purpose=_purpose(raw),
+        stop_price=_dec(raw["stop_price"]) if raw.get("stop_price") not in (None, "") else None,
+        trail_amount=_dec(raw["trail_amount"])
+        if raw.get("trail_amount") not in (None, "")
+        else None,
     )
 
 
@@ -157,6 +161,9 @@ class DeltaExchangeAdapter:
             tick_size=_dec(product.get("tick_size"), "1"),
             lot_size=_dec(product.get("min_size") or product.get("minimum_order_size"), "1"),
             contract_value=_dec(product.get("contract_value"), "1"),
+            max_contracts=_dec(product["position_size_limit"])
+            if product.get("position_size_limit") not in (None, "")
+            else None,
         )
 
     def binance_symbol(self, venue_symbol: str) -> str | None:
@@ -215,6 +222,7 @@ class DeltaExchangeAdapter:
                     take_profit_price=request.take_profit_price,
                     client_order_id=request.client_order_id,
                     order_type=request.order_type,
+                    trail_amount=request.trail_amount,
                 ),
             )
         except aiohttp.ClientConnectorError as exc:
@@ -293,8 +301,8 @@ class DeltaExchangeAdapter:
         out: list[ExchangePosition] = []
         # A stop counts as present if the position carries bracket SL fields *or* a
         # reduce-side stop-loss order is resting for that product (VERIFY on testnet).
-        stop_orders = {
-            o.symbol for o in await self.open_orders() if o.purpose == FillPurpose.STOP_LOSS
+        stop_orders: dict[str, ExchangeOrder] = {
+            o.symbol: o for o in await self.open_orders() if o.purpose == FillPurpose.STOP_LOSS
         }
         for venue_symbol, product in self.client.symbol_map._products.items():
             if venue_symbol not in self.client.symbol_map._delta_to_binance:
@@ -314,21 +322,30 @@ class DeltaExchangeAdapter:
                 size = _dec(row.get("size"))
                 if size == 0:
                     continue
+                sym = str(row.get("product_symbol") or venue_symbol)
+                resting = stop_orders.get(sym)
+                # Delta's Position schema has no bracket fields: the protective stop is a
+                # resting stop_loss_order on the product.  Bracket fields on the row are
+                # honoured if present.  VERIFY on testnet (trail_check).
+                stop_price = (
+                    _dec(row["bracket_stop_loss_price"])
+                    if row.get("bracket_stop_loss_price")
+                    else (resting.stop_price if resting else None)
+                )
                 out.append(
                     ExchangePosition(
-                        symbol=str(row.get("product_symbol") or venue_symbol),
+                        symbol=sym,
                         size=size,
                         entry_price=_dec(row.get("entry_price"))
                         if row.get("entry_price")
                         else None,
-                        # VERIFY: Delta exposes attached bracket prices on the position.
                         has_stop_loss=bool(row.get("bracket_stop_loss_price"))
-                        or str(row.get("product_symbol") or venue_symbol) in stop_orders,
+                        or resting is not None,
                         has_take_profit=bool(row.get("bracket_take_profit_price")),
-                        stop_loss_price=_dec(row["bracket_stop_loss_price"])
-                        if row.get("bracket_stop_loss_price")
-                        else None,
+                        stop_loss_price=stop_price,
                         updated_at=_ts(row.get("updated_at")),
+                        trail_amount=resting.trail_amount if resting else None,
+                        extra={"unrealized_pnl": row.get("unrealized_pnl")},
                     )
                 )
         return out
@@ -411,6 +428,65 @@ class DeltaExchangeAdapter:
         body.setdefault("product_symbol", symbol)
         body.setdefault("reduce_only", True)
         return parse_order(body)
+
+    async def amend_stop(
+        self, symbol: str, client_order_id: str, stop_price: Decimal
+    ) -> ExchangePosition | None:
+        """Move the resting stop-loss order on *symbol* (PUT /v2/orders with stop_price).
+
+        If no stop order is resting, a new position stop is attached instead
+        (POST /v2/orders/bracket), so the call always leaves a stop at *stop_price*
+        or raises.  VERIFY on testnet: editing a bracket child's stop_price.
+        """
+        try:
+            resting = next(
+                (
+                    o
+                    for o in await self.open_orders()
+                    if o.symbol == symbol and o.purpose == FillPurpose.STOP_LOSS
+                ),
+                None,
+            )
+            if resting is not None and resting.exchange_order_id:
+                await self._call(
+                    "amend_stop",
+                    self.client.edit_order(
+                        resting.exchange_order_id, self._product_id(symbol), stop_price=stop_price
+                    ),
+                )
+            else:
+                await self._call(
+                    "amend_stop",
+                    self.client.attach_position_bracket(self._product_id(symbol), stop_price),
+                )
+        except aiohttp.ClientResponseError as exc:
+            if exc.status in (401, 403):
+                raise AuthenticationFailed(str(exc)) from exc
+            if 400 <= exc.status < 500:
+                raise OrderRejected(f"http_{exc.status}: {exc.message}") from exc
+            raise AmbiguousOrderOutcome(f"http_{exc.status}: {exc.message}") from exc
+        except (TimeoutError, aiohttp.ClientError, ConnectionError) as exc:
+            raise AmbiguousOrderOutcome(f"{type(exc).__name__}: {exc}") from exc
+        return next((p for p in await self.positions() if p.symbol == symbol), None)
+
+    async def account_equity(self) -> Decimal:
+        """Wallet ``balance`` plus each open position's ``unrealized_pnl`` (both documented)."""
+        resp = await self._call("balance", self.client.get_balance())
+        rows = _result(resp)
+        if isinstance(resp, dict) and "balances" in resp:
+            rows = resp["balances"]
+        balance = None
+        for row in rows or []:
+            asset = str(row.get("asset_symbol") or row.get("asset") or "").upper()
+            if asset in ("USD", "USDT"):
+                balance = _dec(row.get("balance"))
+                break
+        if balance is None:
+            raise ExchangeUnavailable("no USD/USDT balance row in wallet response")
+        unrealized = sum(
+            (_dec(p.extra.get("unrealized_pnl")) for p in await self.positions()), Decimal("0")
+        )
+        return balance + unrealized
 
     async def available_balance(self) -> Decimal:
         resp = await self._call("balance", self.client.get_balance())

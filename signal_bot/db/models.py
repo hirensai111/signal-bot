@@ -122,7 +122,8 @@ class Signal(Base):
     side: Mapped[str] = mapped_column(String(10), nullable=False)
     entry: Mapped[Decimal] = mapped_column(Numeric(32, 16), nullable=False)
     stop_loss: Mapped[Decimal] = mapped_column(Numeric(32, 16), nullable=False)
-    take_profit: Mapped[Decimal] = mapped_column(Numeric(32, 16), nullable=False)
+    # None for strategies without a fixed target (trend breakout exits by trailing stop).
+    take_profit: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
     leverage: Mapped[int] = mapped_column(Integer, nullable=False)
     risk_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     account_size_assumed: Mapped[Decimal] = mapped_column(Numeric(32, 8), nullable=False)
@@ -143,6 +144,13 @@ class Signal(Base):
     entry_fees_usdt: Mapped[Decimal | None] = mapped_column(Numeric(16, 8), nullable=True)
     slippage_bps: Mapped[Decimal | None] = mapped_column(Numeric(16, 8), nullable=True)
     cancelled_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Signal Bot 2.1: strategy intent beyond entry/stop/target
+    strategy: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    trail_distance: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
+    trail_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    time_stop_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    planned_contracts: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
 
     outcome: Mapped[Optional["SignalOutcome"]] = relationship(
         "SignalOutcome", back_populates="signal", uselist=False
@@ -166,6 +174,9 @@ class RiskState(Base):
     consecutive_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_reset_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     current_open_positions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Highest marked-to-market equity seen (portfolio drawdown is measured from it).
+    peak_equity: Mapped[Decimal | None] = mapped_column(Numeric(32, 8), nullable=True)
+    peak_equity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class SignalOutcome(Base):
@@ -253,7 +264,7 @@ class Order(Base):
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
     intended_entry: Mapped[Decimal] = mapped_column(Numeric(32, 16), nullable=False)
     stop_loss_price: Mapped[Decimal] = mapped_column(Numeric(32, 16), nullable=False)
-    take_profit_price: Mapped[Decimal] = mapped_column(Numeric(32, 16), nullable=False)
+    take_profit_price: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
     state: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
     state_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     filled_size: Mapped[Decimal] = mapped_column(Numeric(32, 16), nullable=False, default=0)
@@ -271,6 +282,20 @@ class Order(Base):
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Trailing stop and time stop (see execution/trailing.py).  Reference-space values are
+    # in the signal's price feed (Binance); venue = reference + price_basis.
+    trail_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="none")
+    trail_distance: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
+    trail_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reference_stop: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
+    price_basis: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
+    best_price: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
+    best_price_bar: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_stop_price: Mapped[Decimal | None] = mapped_column(Numeric(32, 16), nullable=True)
+    stop_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    time_stop_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    exit_reason_hint: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class OrderTransition(Base):

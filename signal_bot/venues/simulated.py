@@ -11,6 +11,9 @@ Matching model (shared with the paper broker):
 * bracket legs live on the position: the stop is a stop-market that walks the
   book when the best bid/ask crosses it (gaps fill at the book, not the stop
   price); the take-profit is a resting limit that fills at its price;
+* a stop can be moved with :meth:`amend_stop` (the bot's stepped trailing stop),
+  or trail natively: with ``trail_amount`` set, the stop follows the best mid
+  price since entry at that distance, continuously, and never loosens;
 * taker/maker fees, periodic funding and a virtual ledger with mark-to-market
   equity.
 
@@ -174,6 +177,8 @@ class _Position:
     stop_price: Decimal | None = None
     take_profit_price: Decimal | None = None
     leverage: int = 1
+    trail_amount: Decimal | None = None  # exchange-native trailing distance
+    trail_best: Decimal | None = None  # best mid price since the trail was attached
 
 
 @dataclass(frozen=True)
@@ -422,6 +427,24 @@ class SimulatedVenue:
         await self._emit([self._position_event(pos)], fault)
         return leg.snapshot()
 
+    async def amend_stop(
+        self, symbol: str, client_order_id: str, stop_price: Decimal
+    ) -> ExchangePosition | None:
+        fault = await self._enter("amend_stop", client_order_id)
+        if fault and fault.action == "reject":
+            raise OrderRejected("amend_stop rejected (injected)")
+        pos = self._positions.get(symbol)
+        if pos is None or pos.size == 0:
+            raise OrderRejected("no position to amend")
+        if pos.stop_price is None:
+            raise OrderRejected("no stop order to amend")
+        pos.stop_price = stop_price
+        await self._emit([self._position_event(pos)], fault)
+        if fault and fault.action == "timeout_after_accept":
+            raise AmbiguousOrderOutcome("amend_stop: response lost after accept (injected)")
+        await self._check_triggers(symbol)
+        return self.position(symbol)
+
     async def close_position(self, symbol: str, client_order_id: str) -> ExchangeOrder:
         fault = await self._enter("close_position", client_order_id)
         await self._before_match(symbol)
@@ -445,6 +468,10 @@ class SimulatedVenue:
         return order.snapshot()
 
     async def available_balance(self) -> Decimal:
+        await self._enter("balance")
+        return self.equity()
+
+    async def account_equity(self) -> Decimal:
         await self._enter("balance")
         return self.equity()
 
@@ -583,6 +610,8 @@ class SimulatedVenue:
                 pos.owner = None
                 pos.stop_price = None
                 pos.take_profit_price = None
+                pos.trail_amount = None
+                pos.trail_best = None
         return [self._position_event(pos)]
 
     def _attach_legs(self, order: _Order, attach: bool) -> list[Event]:
@@ -590,8 +619,17 @@ class SimulatedVenue:
         if pos is None:
             return []
         if attach:
-            pos.stop_price = order.request.stop_loss_price
-            pos.take_profit_price = order.request.take_profit_price
+            req = order.request
+            pos.stop_price = req.stop_loss_price
+            pos.take_profit_price = req.take_profit_price
+            if req.trail_amount:
+                pos.trail_amount = req.trail_amount
+                pos.trail_best = order.avg_price or pos.entry_price
+                if pos.stop_price is None:
+                    long = pos.size > 0
+                    pos.stop_price = pos.trail_best + (
+                        -req.trail_amount if long else req.trail_amount
+                    )
         return [self._position_event(pos)]
 
     async def _check_triggers(self, symbol: str) -> None:
@@ -602,6 +640,14 @@ class SimulatedVenue:
         long = pos.size > 0
         exit_side = "sell" if long else "buy"
         bid, ask = book.best_bid, book.best_ask
+        if pos.trail_amount and pos.stop_price is not None and book.mid is not None:
+            best = pos.trail_best if pos.trail_best is not None else book.mid
+            best = max(best, book.mid) if long else min(best, book.mid)
+            pos.trail_best = best
+            trailed = best - pos.trail_amount if long else best + pos.trail_amount
+            moved = (trailed > pos.stop_price) if long else (trailed < pos.stop_price)
+            if moved:
+                pos.stop_price = trailed
         purpose = None
         if pos.stop_price is not None and (
             (long and bid <= pos.stop_price) or (not long and ask >= pos.stop_price)
@@ -717,6 +763,7 @@ class SimulatedVenue:
             stop_loss_price=pos.stop_price,
             take_profit_price=pos.take_profit_price,
             updated_at=self.clock.now(),
+            trail_amount=pos.trail_amount,
         )
 
     # ------------------------------------------------------------------

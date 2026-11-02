@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 EXIT_STATUS_MAP = {
     "sl_hit": "sl",
+    "trail_hit": "trail",
+    "time_stop": "time_stop",
     "tp_hit": "tp",
     "manual_close": "closed_manual",
     "liquidation": "liquidated",
@@ -357,6 +359,7 @@ def compute_trade_result(order: Order, fills: list[Fill], funding: Decimal) -> d
         exit_reason = _PURPOSE_REASON.get(FillPurpose(dominant)) or _nearest_level(
             order, exit_price
         )
+        exit_reason = _refine_reason(order, exit_reason)
         closed_at = max(utc(f.occurred_at) for f in exit_fills)
     else:
         # No exit fill could be found: assume the worst plausible exit (the stop).
@@ -378,7 +381,9 @@ def compute_trade_result(order: Order, fills: list[Fill], funding: Decimal) -> d
 
     if exit_reason == "sl_hit":
         level = Decimal(str(order.stop_loss_price))
-    elif exit_reason == "tp_hit":
+    elif exit_reason == "trail_hit":
+        level = Decimal(str(order.current_stop_price))
+    elif exit_reason == "tp_hit" and order.take_profit_price is not None:
         level = Decimal(str(order.take_profit_price))
     else:
         level = exit_price
@@ -406,9 +411,27 @@ def compute_trade_result(order: Order, fills: list[Fill], funding: Decimal) -> d
 
 
 def _nearest_level(order: Order, price: Decimal) -> str:
-    sl_dist = abs(price - Decimal(str(order.stop_loss_price)))
+    stop = order.current_stop_price or order.stop_loss_price
+    sl_dist = abs(price - Decimal(str(stop)))
+    if order.take_profit_price is None:
+        return "sl_hit"
     tp_dist = abs(price - Decimal(str(order.take_profit_price)))
     return "sl_hit" if sl_dist < tp_dist else "tp_hit"
+
+
+def _refine_reason(order: Order, reason: str) -> str:
+    """Name trailed-stop and time-stop exits (research reports them separately)."""
+    hint = getattr(order, "exit_reason_hint", None)
+    if reason == "manual_close" and hint in ("time_stop", "trail_hit"):
+        return hint
+    if (
+        reason == "sl_hit"
+        and getattr(order, "trail_mode", "none") in ("stepped", "native")
+        and order.current_stop_price is not None
+        and Decimal(str(order.current_stop_price)) != Decimal(str(order.stop_loss_price))
+    ):
+        return "trail_hit"
+    return reason
 
 
 def _hold_minutes(order: Order, closed_at: datetime) -> int:

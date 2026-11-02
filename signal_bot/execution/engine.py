@@ -86,6 +86,9 @@ class ExecutionConfig:
     protective_retry_attempts: int = 3
     watch_interval: float = 1.0
     require_stream_on_start: bool = False
+    # Trailing stops (signals with trail_distance): "stepped" = exchange-resident stop moved
+    # by execution/trailing.py at each completed bar; "native" = venue trailing stop.
+    trail_mode: str = "stepped"
 
 
 class ExecutionEngine:
@@ -277,8 +280,18 @@ class ExecutionEngine:
         tick = spec.tick_size
         entry = self.round_to_tick(fresh.entry + basis, tick)
         stop = self.round_to_tick(fresh.stop_loss + basis, tick)
-        target = self.round_to_tick(fresh.take_profit + basis, tick)
-        size = self.compute_size(fresh, spec.contract_value)
+        target = (
+            None
+            if fresh.take_profit is None
+            else self.round_to_tick(fresh.take_profit + basis, tick)
+        )
+        trail = Decimal(str(fresh.trail_distance)) if fresh.trail_distance else None
+        trail_mode = self.config.trail_mode if trail else "none"
+        if fresh.planned_contracts:
+            # The portfolio rules already sized this trade in whole contracts on shared equity.
+            size = Decimal(str(fresh.planned_contracts))
+        else:
+            size = self.compute_size(fresh, spec.contract_value)
         size = (size / spec.lot_size).to_integral_value(rounding=ROUND_DOWN) * spec.lot_size
         if size < spec.lot_size:
             await self._cancel_signal(fresh, "size_below_min", basis=basis)
@@ -306,6 +319,12 @@ class ExecutionEngine:
             stop_loss_price=stop,
             take_profit_price=target,
             correlation_id=str(fresh.id),
+            trail_mode=trail_mode,
+            trail_distance=trail,
+            trail_from=utc(fresh.trail_from),
+            reference_stop=fresh.stop_loss if trail else None,
+            price_basis=basis,
+            time_stop_at=utc(fresh.time_stop_at),
         )
         if order is None:
             return None
@@ -344,8 +363,9 @@ class ExecutionEngine:
             size=size,
             order_type=self.config.order_type,
             limit_price=limit,
-            stop_loss_price=stop,
+            stop_loss_price=None if trail_mode == "native" else stop,
             take_profit_price=target,
+            trail_amount=self.round_to_tick(trail, tick) if trail_mode == "native" else None,
         )
         try:
             ack = await self.adapter.place_order(request)
@@ -567,10 +587,12 @@ class ExecutionEngine:
 
         exit_side = "sell" if order.side == "buy" else "buy"
         size = order.filled_size or order.size
+        # A trailed stop may have moved since entry: never re-protect at a looser level.
+        stop_price = order.current_stop_price or order.stop_loss_price
         for attempt in range(1, self.config.protective_retry_attempts + 1):
             try:
                 await self.adapter.place_protective_stop(
-                    order.symbol, exit_side, size, order.stop_loss_price, coid
+                    order.symbol, exit_side, size, stop_price, coid
                 )
                 pos = next(
                     (p for p in await self.adapter.positions() if p.symbol == order.symbol), None

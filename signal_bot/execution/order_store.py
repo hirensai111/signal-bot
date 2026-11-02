@@ -108,8 +108,14 @@ class OrderStore:
         limit_price: Decimal | None,
         intended_entry: Decimal,
         stop_loss_price: Decimal,
-        take_profit_price: Decimal,
+        take_profit_price: Decimal | None,
         correlation_id: str | None = None,
+        trail_mode: str = "none",
+        trail_distance: Decimal | None = None,
+        trail_from: datetime | None = None,
+        reference_stop: Decimal | None = None,
+        price_basis: Decimal | None = None,
+        time_stop_at: datetime | None = None,
     ) -> Order | None:
         """Create the PENDING order for a signal.  Returns ``None`` if one already exists."""
         now = self.clock.now()
@@ -134,6 +140,13 @@ class OrderStore:
             correlation_id=correlation_id,
             created_at=now,
             updated_at=now,
+            trail_mode=trail_mode,
+            trail_distance=trail_distance,
+            trail_from=trail_from,
+            reference_stop=reference_stop,
+            price_basis=price_basis,
+            current_stop_price=stop_loss_price,
+            time_stop_at=time_stop_at,
         )
         async with self.session_factory() as session:
             session.add(order)
@@ -164,6 +177,18 @@ class OrderStore:
         async with self.session_factory() as session:
             rows = await session.execute(select(Order).where(Order.state.in_(values)))
             return list(rows.scalars().all())
+
+    async def symbols_active_since(self, since: datetime, exposure_states) -> set[str]:
+        """Venue symbols with exposure now, or a position that closed at/after *since*."""
+        values = [str(s) for s in exposure_states]
+        async with self.session_factory() as session:
+            rows = await session.execute(
+                select(Order.symbol).where(
+                    Order.state.in_(values)
+                    | ((Order.state == str(S.CLOSED)) & (Order.updated_at >= since))
+                )
+            )
+            return {r[0] for r in rows}
 
     async def recent(self, limit: int = 50) -> list[Order]:
         async with self.session_factory() as session:
@@ -407,6 +432,41 @@ class OrderStore:
                 logger.info("Duplicate fill %s ignored", fill.fill_id)
                 return False
         return True
+
+    async def update_trailing(
+        self,
+        client_order_id: str,
+        *,
+        best_price: Decimal | None = None,
+        best_price_bar: datetime | None = None,
+        current_stop_price: Decimal | None = None,
+    ) -> Order | None:
+        """Persist trailing-stop progress.  The stop is only ever written tighter."""
+        async with self.session_factory() as session:
+            order = await session.scalar(
+                select(Order).where(Order.client_order_id == client_order_id).with_for_update()
+            )
+            if order is None:
+                return None
+            if best_price is not None:
+                order.best_price = best_price
+                order.best_price_bar = best_price_bar
+            if current_stop_price is not None:
+                order.current_stop_price = current_stop_price
+                order.stop_updated_at = self.clock.now()
+            order.updated_at = self.clock.now()
+            await session.commit()
+            return order
+
+    async def set_exit_hint(self, client_order_id: str, hint: str) -> None:
+        """Record why *we* closed a position (e.g. ``time_stop``) for the outcome record."""
+        async with self.session_factory() as session:
+            order = await session.scalar(
+                select(Order).where(Order.client_order_id == client_order_id)
+            )
+            if order is not None:
+                order.exit_reason_hint = hint[:20]
+                await session.commit()
 
     async def set_protective_status(self, client_order_id: str, status: str) -> None:
         async with self.session_factory() as session:

@@ -114,6 +114,12 @@ class PaperBroker(SimulatedVenue):
         finally:
             await self.checkpoint()
 
+    async def amend_stop(self, symbol: str, client_order_id: str, stop_price: Decimal):
+        try:
+            return await super().amend_stop(symbol, client_order_id, stop_price)
+        finally:
+            await self.checkpoint()
+
     # ------------------------------------------------------------------
     async def run(self) -> None:
         """Poll live books for symbols with exposure; trigger legs; persist the ledger."""
@@ -248,13 +254,20 @@ class PaperBroker(SimulatedVenue):
         self.initial_balance = Decimal(state.get("initial_balance", self.initial_balance))
         self._order_counter = state.get("order_counter", 0)
         self._fill_counter = state.get("fill_counter", 0)
-        dec_fields = {"size", "entry_price", "stop_price", "take_profit_price"}
+        dec_fields = {
+            "size",
+            "entry_price",
+            "stop_price",
+            "take_profit_price",
+            "trail_amount",
+            "trail_best",
+        }
         for raw in state.get("positions", []):
             kw = {
                 k: (Decimal(v) if k in dec_fields and v is not None else v) for k, v in raw.items()
             }
             self._positions[kw["symbol"]] = _Position(**kw)
-        req_dec = {"size", "limit_price", "stop_loss_price", "take_profit_price"}
+        req_dec = {"size", "limit_price", "stop_loss_price", "take_profit_price", "trail_amount"}
         for raw in state.get("orders", []):
             req = {
                 k: (Decimal(v) if k in req_dec and v is not None else v)

@@ -51,7 +51,7 @@ class DeltaSymbolMap:
         self._product_id_to_binance: dict[int, str] = {}
         self.missing: list[str] = []
 
-    async def load(self, strict: bool = False) -> None:
+    async def load(self, strict: bool = False, symbols: list[str] | None = None) -> None:
         """Fetch products and map watched Binance symbols to live Delta perpetuals.
 
         Only ``perpetual_futures`` in state ``live`` are considered, so an expired or
@@ -73,8 +73,9 @@ class DeltaSymbolMap:
                 continue
             self._products[delta_sym] = p
 
+        watched = list(symbols or self.client.watched_symbols or WATCHED_BINANCE_SYMBOLS)
         missing: list[str] = []
-        for binance_sym in WATCHED_BINANCE_SYMBOLS:
+        for binance_sym in watched:
             base = binance_sym.replace("USDT", "")
             delta_sym = f"{base}USD"
             if delta_sym in self._products:
@@ -104,7 +105,7 @@ class DeltaSymbolMap:
             "DeltaSymbolMap loaded %d products; mapped %d/%d symbols",
             len(self._products),
             len(self._binance_to_delta),
-            len(WATCHED_BINANCE_SYMBOLS),
+            len(watched),
         )
 
     # ------------------------------------------------------------------
@@ -138,6 +139,20 @@ class DeltaSymbolMap:
 # ---------------------------------------------------------------------------
 
 
+def signed_trail_amount(trail_amount: Decimal, entry_side: str) -> Decimal:
+    """Delta's trail amount with the sign set by ``DELTA_TRAIL_AMOUNT_SIGN``.
+
+    ``positive`` (default) sends the distance as a positive number for both sides;
+    ``negative_for_long`` sends it negative when the stop protects a long (a sell stop)
+    and positive for a short.  Which one Delta expects is checked on testnet.
+    """
+    distance = abs(Decimal(str(trail_amount)))
+    mode = getattr(settings, "delta_trail_amount_sign", "positive")
+    if mode == "negative_for_long" and entry_side.lower() == "buy":
+        return -distance
+    return distance
+
+
 class DeltaClient:
     """Async REST client for Delta Exchange India."""
 
@@ -147,6 +162,7 @@ class DeltaClient:
         api_secret: str | None = None,
         mode: str | None = None,
         request_timeout: float = 10.0,
+        symbols: list[str] | None = None,
     ):
         self.api_key = (api_key or settings.delta_api_key or "").strip()
         self.api_secret = (api_secret or settings.delta_api_secret or "").strip()
@@ -155,6 +171,7 @@ class DeltaClient:
             raise ValueError(f"Invalid DELTA_MODE={self.mode}; choose testnet or production")
         self.rest_url = ENDPOINTS[self.mode]["rest"]
         self.ws_url = ENDPOINTS[self.mode]["ws"]
+        self.watched_symbols = list(symbols) if symbols else None  # default: SYMBOLS
         self.symbol_map = DeltaSymbolMap(self)
         # Bounded timeouts: an order placement that hangs for aiohttp's default
         # 5 minutes is indistinguishable from a lost order.
@@ -341,13 +358,20 @@ class DeltaClient:
         symbol: str,
         side: str,
         size: int,
-        stop_loss_price: Decimal,
-        take_profit_price: Decimal,
+        stop_loss_price: Decimal | None,
+        take_profit_price: Decimal | None,
         client_order_id: str,
         order_type: str = "limit_ioc",
         entry_price: Decimal | None = None,
+        trail_amount: Decimal | None = None,
     ) -> dict:
-        """Place a bracket order with embedded SL/TP.
+        """Place an order with an attached bracket stop (and optional take-profit).
+
+        ``trail_amount`` makes the bracket stop an exchange-native trailing stop
+        (``bracket_trail_amount``).  Delta documents it as "required if bracket stop
+        price is empty", so with a trail we send no fixed stop price.  The sign Delta
+        expects is not documented; it is set by ``DELTA_TRAIL_AMOUNT_SIGN`` and must be
+        confirmed on testnet (``python -m signal_bot.delta.trail_check``).
 
         *symbol* may be a **Binance** symbol (e.g. ``BTCUSDT``) or a **Delta**
         symbol (e.g. ``BTCUSD``).  Binance symbols are translated automatically.
@@ -372,11 +396,16 @@ class DeltaClient:
             "side": side.lower(),
             "order_type": order_type,
             "client_order_id": client_order_id,
-            "bracket_stop_loss_price": str(stop_loss_price),
-            "bracket_stop_loss_limit_price": str(stop_loss_price),
-            "bracket_take_profit_price": str(take_profit_price),
-            "bracket_take_profit_limit_price": str(take_profit_price),
+            "bracket_stop_trigger_method": "last_traded_price",
         }
+        if trail_amount is not None:
+            body["bracket_trail_amount"] = str(signed_trail_amount(trail_amount, side))
+        elif stop_loss_price is not None:
+            # Market stop: a stop-limit at the trigger price can be skipped in a fast move.
+            body["bracket_stop_loss_price"] = str(stop_loss_price)
+        if take_profit_price is not None:
+            body["bracket_take_profit_price"] = str(take_profit_price)
+            body["bracket_take_profit_limit_price"] = str(take_profit_price)
         if entry_price is not None and "limit" in order_type:
             body["limit_price"] = str(entry_price)
         return await self._request("POST", "/v2/orders", data=body)
@@ -415,6 +444,25 @@ class DeltaClient:
 
     async def place_order(self, body: dict[str, Any]) -> dict:
         return await self._request("POST", "/v2/orders", data=body)
+
+    async def edit_order(
+        self,
+        order_id: str | int,
+        product_id: int,
+        *,
+        stop_price: Decimal | None = None,
+        limit_price: Decimal | None = None,
+        trail_amount: Decimal | None = None,
+    ) -> dict:
+        """PUT /v2/orders: edit a resting order (used to move a stop-loss trigger price)."""
+        body: dict[str, Any] = {"id": int(order_id), "product_id": product_id}
+        if stop_price is not None:
+            body["stop_price"] = str(stop_price)
+        if limit_price is not None:
+            body["limit_price"] = str(limit_price)
+        if trail_amount is not None:
+            body["trail_amount"] = str(trail_amount)
+        return await self._request("PUT", "/v2/orders", data=body)
 
     async def attach_position_bracket(
         self, product_id: int, stop_loss_price: Decimal, take_profit_price: Decimal | None = None

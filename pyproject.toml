@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "signal-bot"
-version = "2.0.1"
+version = "2.1.0"
 description = "Fault-tolerant, event-driven crypto futures research, paper-trading and execution platform"
 requires-python = ">=3.11"
 dependencies = [
@@ -39,7 +39,7 @@ where = ["."]
 include = ["signal_bot*"]
 
 [tool.setuptools.package-data]
-"signal_bot" = ["db/schema.sql", "observability/static/*", "research/strategies/*.toml"]
+"signal_bot" = ["db/schema.sql", "observability/static/*", "research/strategies/*.toml", "research/*.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

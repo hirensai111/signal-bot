@@ -92,6 +92,13 @@ class RiskGovernor:
         self._background: set[asyncio.Task] = set()
         # Most recent pre-trade verdict (periodic loop or a real signal), for the control room.
         self.last_verdict: tuple[bool, str | None] | None = None
+        # Portfolio rules (risk/portfolio.py), wired by main for the trend strategy:
+        # ``portfolio_check(signal)`` re-admits a sized signal against the current book just
+        # before submission; ``portfolio_monitor()`` returns the exposure summary used for
+        # the aggregate-drawdown breaker.
+        self.portfolio_check = None
+        self.portfolio_monitor = None
+        self.portfolio_strategies: frozenset[str] = frozenset({"trend_breakout"})
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -203,8 +210,37 @@ class RiskGovernor:
                 "min_balance_usdt",
                 f"min_balance_usdt breached: {balance} < {self.min_balance_usdt}",
             )
+        if (
+            signal is not None
+            and self.portfolio_check is not None
+            and getattr(signal, "strategy", None) in self.portfolio_strategies
+        ):
+            try:
+                ok, reason = await self.portfolio_check(signal)
+            except Exception:
+                logger.exception("Portfolio check failed — failing closed")
+                return self._deny("portfolio_unavailable", "portfolio_unavailable")
+            if not ok:
+                return self._deny("portfolio", reason or "portfolio")
         self.last_verdict = (True, None)
         return True, None
+
+    async def check_portfolio_drawdown(self) -> dict | None:
+        """Open/clear the ``portfolio_drawdown`` breaker from marked-to-market equity."""
+        if self.portfolio_monitor is None:
+            return None
+        summary = await self.portfolio_monitor()
+        if summary is None:
+            return None
+        if not summary.get("entries_allowed", True):
+            self.set_breaker(
+                "portfolio_drawdown",
+                f"drawdown {summary.get('drawdown_pct')}% >= halt "
+                f"{summary['limits']['drawdown_halt'] * 100:.1f}% of peak equity",
+            )
+        else:
+            self.clear_breaker("portfolio_drawdown")
+        return summary
 
     async def _check_state(self) -> str | None:
         async with self.session_factory() as session:
@@ -398,6 +434,10 @@ class RiskGovernor:
     # ------------------------------------------------------------------
     async def _periodic_check_loop(self) -> None:
         while self._running:
+            try:
+                await self.check_portfolio_drawdown()
+            except Exception:
+                logger.exception("Portfolio drawdown check failed")
             try:
                 allowed, reason = await self.check(None)
                 if not allowed and reason and self._should_alert(reason):

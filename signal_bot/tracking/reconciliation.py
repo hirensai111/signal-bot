@@ -57,6 +57,7 @@ class Reconciler:
         unknown_grace_seconds: float = 300.0,
         block_on_orphans: bool = True,
         retry_delay: float = 10.0,
+        trailing=None,
     ) -> None:
         self.adapter = adapter
         self.store = order_store
@@ -70,6 +71,9 @@ class Reconciler:
         self.unknown_grace = timedelta(seconds=unknown_grace_seconds)
         self.block_on_orphans = block_on_orphans
         self.retry_delay = retry_delay
+        # TrailingStopManager: re-derives trailing stops and runs overdue time stops after
+        # every pass (on restart this restores stops the process missed while down).
+        self.trailing = trailing
 
         self._running = False
         self._task: asyncio.Task | None = None
@@ -235,6 +239,21 @@ class Reconciler:
                 found.append({"kind": "missing_protective", "order": order.client_order_id})
                 if self.engine is not None:
                     await self.engine.ensure_protection(order.client_order_id, recheck=True)
+            elif (
+                order.trail_mode == "stepped"
+                and pos.stop_loss_price is not None
+                and order.current_stop_price is not None
+                and pos.stop_loss_price != order.current_stop_price
+            ):
+                metrics.RECONCILIATION_DISCREPANCIES.labels("trailing_stop_mismatch").inc()
+                found.append(
+                    {
+                        "kind": "trailing_stop_mismatch",
+                        "order": order.client_order_id,
+                        "venue_stop": str(pos.stop_loss_price),
+                        "recorded_stop": str(order.current_stop_price),
+                    }
+                )
 
         for order in await self.store.in_states([S.RECONCILIATION_REQUIRED, S.SUBMISSION_UNKNOWN]):
             owned_symbols.add(order.symbol)
@@ -273,6 +292,10 @@ class Reconciler:
 
         for d in found:
             await self._publish(EventType.RECONCILIATION_DISCREPANCY, d)
+        if self.trailing is not None:
+            # Venue stops looser than the derived trailing level are amended, tighter ones
+            # adopted, and overdue time stops executed.
+            await self.trailing.sync_all("startup" if is_startup else "reconcile")
         return found
 
     # ------------------------------------------------------------------

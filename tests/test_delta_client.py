@@ -257,9 +257,60 @@ async def test_place_bracket_order_payload(client: DeltaClient):
     assert body["client_order_id"] == "test-coid-1"
     assert body["limit_price"] == "65000"
     assert body["bracket_stop_loss_price"] == "64000"
-    assert body["bracket_stop_loss_limit_price"] == "64000"
+    # Stop-market: no limit price, so a fast move cannot skip the stop.
+    assert "bracket_stop_loss_limit_price" not in body
+    assert body["bracket_stop_trigger_method"] == "last_traded_price"
     assert body["bracket_take_profit_price"] == "67000"
     assert body["bracket_take_profit_limit_price"] == "67000"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sign_mode", "side", "expected"),
+    [
+        ("positive", "buy", "450"),
+        ("negative_for_long", "buy", "-450"),
+        ("negative_for_long", "sell", "450"),
+    ],
+)
+async def test_trailing_bracket_has_no_fixed_stop_or_target(
+    client: DeltaClient, monkeypatch, sign_mode, side, expected
+):
+    from signal_bot.config import settings
+
+    monkeypatch.setattr(settings, "delta_trail_amount_sign", sign_mode)
+    client._session = MagicMock()
+    client._products_cache = _make_products_response()["products"]
+    with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
+        await client.place_bracket_order(
+            symbol="BTCUSD",
+            side=side,
+            size=3,
+            entry_price=Decimal("65000"),
+            stop_loss_price=Decimal("64000"),
+            take_profit_price=None,
+            client_order_id="trail-1",
+            trail_amount=Decimal("450"),
+        )
+    body = mock_req.call_args.kwargs["data"]
+    # Delta: bracket_trail_amount is "required if bracket stop price is empty".
+    assert body["bracket_trail_amount"] == expected
+    assert "bracket_stop_loss_price" not in body
+    assert not any(k.startswith("bracket_take_profit") for k in body)
+
+
+@pytest.mark.asyncio
+async def test_edit_order_moves_stop_price(client: DeltaClient):
+    client._session = MagicMock()
+    with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
+        await client.edit_order(9001, 27, stop_price=Decimal("64500.5"))
+    method, path = mock_req.call_args.args[:2]
+    assert (method, path) == ("PUT", "/v2/orders")
+    assert mock_req.call_args.kwargs["data"] == {
+        "id": 9001,
+        "product_id": 27,
+        "stop_price": "64500.5",
+    }
 
 
 # ---------------------------------------------------------------------------
