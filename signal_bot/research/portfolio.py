@@ -103,6 +103,14 @@ class PortfolioRun:
     accepted_per_bar: Counter = field(default_factory=Counter)
     exposure: list[dict[str, float]] = field(default_factory=list)
     open_at_end: list[dict[str, Any]] = field(default_factory=list)
+    # First bar any symbol could trade (Delta listing dates): metrics start here, so
+    # years before the venue existed do not count as flat, "non-negative" periods.
+    active_from: pd.Timestamp | None = None
+
+    def active_curve(self) -> list[tuple[pd.Timestamp, float]]:
+        if self.active_from is None:
+            return self.curve
+        return [(t, e) for t, e in self.curve if t >= self.active_from]
 
 
 def _random_decisions(sym: _Symbol, real: dict[int, Any], params: TrendParams, rng, lo, hi):
@@ -196,6 +204,8 @@ def run_portfolio(
     corr_cache = cache.setdefault(("corr", rkey), {})
 
     run = PortfolioRun()
+    listed = [s.entry.listed_at for s in symbols.values() if s.entry.listed_at is not None]
+    run.active_from = max(t_start, min(listed)) if respect_listing and listed else t_start
     cash = initial
     peak = initial
     open_: dict[str, OpenTrade] = {}
@@ -323,7 +333,8 @@ def _exposure(t, equity, peak, positions, corr) -> dict[str, float]:
 
 def summarize(run: PortfolioRun, initial: float) -> dict[str, Any]:
     filled = [t for t in run.trades if t.filled and t.exit_time is not None]
-    curve = pd.Series([e for _, e in run.curve], index=[t for t, _ in run.curve], dtype=float)
+    active = run.active_curve()
+    curve = pd.Series([e for _, e in active], index=[t for t, _ in active], dtype=float)
     if curve.empty:
         curve = pd.Series([initial])
     final = float(curve.iloc[-1])
@@ -332,6 +343,8 @@ def summarize(run: PortfolioRun, initial: float) -> dict[str, Any]:
     r = np.array([t.realized_r for t in filled]) if filled else np.array([])
     exp = run.exposure
     return {
+        "active_from": None if run.active_from is None else str(run.active_from),
+        "years": round(years, 3),
         "final_equity": round(final, 2),
         "net_return_pct": round((final / initial - 1) * 100, 4),
         "cagr_pct": round(((final / initial) ** (1 / years) - 1) * 100, 4)
@@ -393,9 +406,10 @@ def _group(trades):
 
 
 def windows(run: PortfolioRun, days: int) -> list[dict[str, Any]]:
-    if not run.curve:
+    active = run.active_curve()
+    if not active:
         return []
-    curve = pd.Series([e for _, e in run.curve], index=[t for t, _ in run.curve])
+    curve = pd.Series([e for _, e in active], index=[t for t, _ in active])
     out, t0 = [], curve.index[0]
     while t0 + pd.Timedelta(days=days) <= curve.index[-1] + pd.Timedelta(hours=4):
         w = curve[(curve.index >= t0) & (curve.index < t0 + pd.Timedelta(days=days))]
@@ -506,9 +520,13 @@ def evaluate_portfolio(
 
 
 def independent_baseline(
-    cfg: dict[str, Any], datasets: list[Dataset], *, start=None, end=None
+    cfg: dict[str, Any], datasets: list[Dataset], *, start=None, end=None, respect_listing=None
 ) -> dict[str, Any]:
-    """What the per-symbol backtests imply if each coin had its own full account."""
+    """What the per-symbol backtests imply if each coin had its own full account.
+
+    Uses the same trading window per symbol as the portfolio run (from Delta's listing
+    date when listing dates are respected), so the comparison is like for like.
+    """
     from signal_bot.research.fill_model import Sizing, simulate
     from signal_bot.research.strategies import TrendBreakout
 
@@ -516,11 +534,21 @@ def independent_baseline(
     cost = CostModel(**cfg.get("costs", {}))
     initial = float(cfg.get("sizing", {}).get("initial_equity", 10_000.0))
     sizing = Sizing(initial, float(cfg.get("portfolio", {}).get("risk_per_trade", 0.005)), 5.0)
+    uni_cfg = cfg.get("universe", {})
+    universe = load_universe(uni_cfg.get("contracts"))
+    if respect_listing is None:
+        respect_listing = bool(uni_cfg.get("respect_listing_dates", True))
     out = {}
     for ds in datasets:
+        if ds.symbol not in universe:
+            continue
         frame = frame_for(ds, params.timeframe)
         intents = TrendBreakout(**params.to_dict()).generate(ds)
-        lo = frame.index.searchsorted(_ts(start)) if start else 0
+        sym_start = _ts(start) if start else frame.index[0]
+        listed = universe[ds.symbol].listed_at
+        if respect_listing and listed is not None:
+            sym_start = max(sym_start, listed)
+        lo = frame.index.searchsorted(sym_start)
         hi = frame.index.searchsorted(_ts(end)) if end else len(frame)
         intents = [i for i in intents if lo <= i.bar < hi]
         trades, curve = simulate(frame, intents, cost, sizing, ds.symbol)

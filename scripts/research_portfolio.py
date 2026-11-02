@@ -63,7 +63,9 @@ def main() -> None:
     result = evaluate_portfolio(
         cfg, data, start=start, end=end, respect_listing=respect, random_runs=args.random_runs
     )
-    result["independent_backtests"] = independent_baseline(cfg, data, start=start, end=end)
+    result["independent_backtests"] = independent_baseline(
+        cfg, data, start=start, end=end, respect_listing=respect
+    )
     result["meta"] = {
         "strategy": cfg["name"],
         "version": cfg.get("version"),

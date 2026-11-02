@@ -105,6 +105,14 @@ def test_symbols_cannot_trade_before_delta_listed_them(tmp_path):
     run = run_portfolio(cfg, [ds], limits=LOOSE)
     assert run.refusals["not_listed_on_delta"] >= 1
     assert all(t.signal_time >= pd.Timestamp(listed) for t in run.trades)
+    # metrics and windows start at the listing, not years earlier with a flat curve
+    from signal_bot.research.portfolio import windows
+
+    assert run.active_from == pd.Timestamp(listed)
+    assert all(
+        pd.Timestamp(w["start"], tz="UTC") >= pd.Timestamp(listed).normalize()
+        for w in windows(run, 30)
+    )
     unlisted = run_portfolio(cfg, [ds], limits=LOOSE, respect_listing=False)
     assert len(unlisted.trades) > len(run.trades)
 
