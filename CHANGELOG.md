@@ -1,12 +1,52 @@
 # Changelog
 
-## Unreleased
+## 2.1.0
+
+Paper-trading the trend strategy as one portfolio. It is still **not validated**; see
+`docs/research.md`.
+
+### Added
+- **Live 4h trend signals.**
+  - `signals/trend.py` is the single implementation of the trend-breakout entry rule, used by the research backtest and by the live pipeline (`signals/trend_live.py`).
+  - The pipeline decides only on completed 4h candles, from a `CandleHistory` warmed up over Binance REST.
+  - It batches each bar close across symbols, so arrival order cannot change which trades are taken.
+- **Replay-parity tests.**
+  - Live and research decisions are bit-identical on real Binance BTCUSDT 4h bars (fixture), and after a 1000-bar REST warm-up.
+  - A full-stack replay (pipeline, governor, engine, simulated venue, trailing stops, outcomes) takes the same 28 trades as the backtest.
+- **Trailing stops end to end** (`execution/trailing.py`). Stepped mode is the default, and the researched exit: after every completed bar the exchange-resident stop moves to the research rule's level, never looser.
+  - Reconciliation re-derives trailing stops after a restart: looser venue stops are amended, tighter ones adopted, and a stop already through the market exits.
+  - Time stops at the strategy's last bar.
+  - Recovery stops use the trailed level.
+  - Exits are recorded as `trail_hit` and `time_stop`.
+- **Native trailing option** (`TRAIL_MODE=native`) through Delta's `bracket_trail_amount`, with `DELTA_TRAIL_AMOUNT_SIGN`.
+- `python -m signal_bot.delta.trail_check`: a testnet-only probe that measures Delta's trailing-stop sign, its behaviour, and stop editing.
+- **Venue support.** `ExchangeAdapter.amend_stop` and `account_equity`.
+  - Delta: stop edits via `PUT /v2/orders`; stop and trail read from the resting stop order; equity = wallet balance + unrealised PnL; position size limits.
+  - The simulated venue and paper broker support amendment and continuous native trails, persisted across restarts.
+- **Portfolio rules** (`risk/portfolio.py`), shared by live trading and research.
+  - At each bar close they rank simultaneous entries and size them on marked-to-market shared equity in whole Delta contracts, capped by position limits.
+  - Limits: positions, total open risk to current stops, correlation-adjusted risk, gross leverage, entries per bar, and a margin buffer.
+  - Drawdown: risk is halved at 10%; at 20% the `portfolio_drawdown` breaker stops new entries.
+  - The governor re-checks just before submission.
+- **Portfolio research.**
+  - `research/portfolio.py` replays all symbols on one timeline with the unchanged fill model, Delta contract specs and listing dates (`research/delta_universe.json`).
+  - `scripts/research_portfolio.py` runs it.
+  - `trend_portfolio.toml` is the frozen signal plus a priori portfolio limits, and is the new default `STRATEGY_CONFIG`.
+- **Control room:** stops and exits, portfolio risk, and trend signal panels.
+- **Metrics:** trailing-stop updates, time stops, trend decisions, portfolio open/correlated risk and drawdown.
+- **Schema upgrade.** Additive and idempotent, run at startup (`db/migrate.py`).
+
+### Changed
+- **Default strategy.** `STRATEGY_CONFIG` defaults to the trend portfolio. The 2.0 sweep still runs with `liquidity_sweep.toml`.
+- **Production market data by default.** `BINANCE_TESTNET` defaults to `false`. It only selects market data, and the testnet feed is synthetic. Trend mode refuses to start on it.
+- **Stop-market brackets.** Delta bracket stops are stop-market orders (no `bracket_stop_loss_limit_price`), as the fill model assumes.
+- **Trend-mode governor limits.** They are derived from the portfolio rules: 6 positions, -6R/day, 18 trades/day, 15 consecutive losses. The 1R-per-open-position projection is replaced by the portfolio's open-risk cap. Explicitly set, stricter settings still apply, and `RISK_PCT_PER_TRADE` and `MAX_CONCURRENT_POSITIONS` cap the portfolio.
+- **Corrected docs.** The research trail is stepped (once per completed bar), not Delta's continuous `bracket_trail_amount`.
 
 ### Research
-- The fill model supports constant-distance trailing stops, matching Delta's `bracket_trail_amount`.
-- New strategies: `trend_breakout`, a 4h Donchian breakout with EMA200 and volume filters and a trailing stop, and `liquidity_sweep_v2`, the production sweep entries with a minimum stop distance and re-set targets.
-- `scripts/research_dev.py` (development data only, every run logged) and `scripts/research_holdout.py` (a committed config only; every holdout look counted); the `validation.evaluation_start` warm-up.
-- Results are in `docs/research.md`. Trend breakout 0.2.0 is not validated: +0.10R per trade across 11 coins in the holdout year (not significant), against −0.26R for the production sweep. Sweep v2 is dropped.
+- **Candidates.** `trend_breakout` (4h Donchian, EMA200 and volume filters, trailing stop) and `liquidity_sweep_v2`. Pre-registered holdout testing with `scripts/research_dev.py` and `scripts/research_holdout.py`.
+- **Trend breakout 0.2.0, per coin:** +0.10R per trade across 11 coins in the holdout year (not significant).
+- **As one portfolio** (look 3 at the holdout year): +3.4% with a -16.4% drawdown, against +19.6% claimed by summing the per-coin backtests. Not validated.
 
 ## 2.0.1
 

@@ -16,7 +16,8 @@ deliberately and each proven by an automated test.
 | Risk | Persisted kill switch, worst-case daily loss budget, circuit breakers for stream, auth, unresolved-order and orphan-exposure conditions; fails closed |
 | Testing | 9 failure scenarios run end to end against a fault-injecting exchange, on SQLite and PostgreSQL |
 | Paper trading | Fills from live Delta order books with latency, depth, fees, funding and a persisted ledger |
-| Research | Deterministic fill model, IS/OOS, walk-forward, cost sensitivity, random-entry baselines, versioned JSON/HTML reports |
+| Research | Deterministic fill model, IS/OOS, walk-forward, cost sensitivity, random-entry baselines, a shared-capital portfolio simulator, versioned JSON/HTML reports |
+| Strategy | 4h trend breakout over the Delta perpetuals, decided on completed candles by the same code in research and live (replay-tested), stepped trailing stops on the exchange, portfolio limits on one account. Not validated: it runs in paper mode to be measured forward ([results](docs/research.md#portfolio-riskportfoliopy-researchportfoliopy)) |
 | Operations | JSON logs with correlation ids, Prometheus metrics and alerts, Grafana dashboard, control room with an authenticated halt control and audit trail |
 
 ## Quick start
@@ -49,7 +50,10 @@ checklist in [docs/runbook.md](docs/runbook.md) (the bot refuses to start withou
 | Path | Responsibility |
 |---|---|
 | `signal_bot/ingest`, `storage/writer.py` | Binance backfill and streams; persist, then fan out closed candles per subscriber |
-| `signal_bot/features`, `signals` | HTF levels, microstructure (CVD, volume), sweep detection, sizing |
+| `signal_bot/signals/trend*.py` | Trend decision rule (shared with research), live 4h pipeline |
+| `signal_bot/risk/portfolio.py` | Shared-capital portfolio rules (live and research) |
+| `signal_bot/execution/trailing.py` | Stepped trailing stops, time stops, restart re-derivation |
+| `signal_bot/features`, `signals` | Candle history, HTF levels, microstructure (CVD, volume), sweep detection, sizing |
 | `signal_bot/events` | Event contract, bus, journal, replay |
 | `signal_bot/execution` | Adapter interface, Delta adapter, order state machine, execution engine |
 | `signal_bot/venues` | Fault-injecting simulator, paper broker |

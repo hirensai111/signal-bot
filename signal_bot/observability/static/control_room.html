@@ -717,13 +717,15 @@ td.r, th.r { text-align: right; }
     const port = s.portfolio;
     const lim = (port && port.limits) || {};
     const pct = (v) => v == null ? "–" : `${fmtNum(v, 2)}%`;
+    // Limits gate NEW entries; winners' risk to a trailing stop can grow past them.
+    const over = (v, limit) => `${pct(v)} of ${pct(limit)}` + (v > limit ? " (above the entry limit: new entries refused)" : "");
     const pairs2 = port ? [
       ["Equity (marked to market)", fmtMoney(port.equity)],
       ["Peak equity", fmtMoney(port.peak_equity)],
       ["Drawdown", `${pct(port.drawdown_pct)} (risk halves at ${pct(lim.drawdown_reduce * 100)}, entries stop at ${pct(lim.drawdown_halt * 100)})`],
       ["Open positions", `${port.positions} of ${lim.max_positions}`],
-      ["Open risk to stops", `${pct(port.open_risk_pct)} of ${pct(lim.max_open_risk * 100)}`],
-      ["Correlation-adjusted risk", `${pct(port.correlated_risk_pct)} of ${pct(lim.max_correlated_risk * 100)}`],
+      ["Open risk to stops", over(port.open_risk_pct, lim.max_open_risk * 100)],
+      ["Correlation-adjusted risk", over(port.correlated_risk_pct, lim.max_correlated_risk * 100)],
       ["Gross leverage", `${fmtNum(port.gross_leverage, 2)}x of ${fmtNum(lim.max_gross_leverage, 1)}x`],
       ["Risk per trade", `${pct(lim.risk_per_trade * 100)}${port.risk_scaled ? " (halved: in drawdown)" : ""}`],
       ["New entries", port.entries_allowed ? "Allowed" : "Stopped: drawdown limit"],

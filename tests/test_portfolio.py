@@ -177,3 +177,38 @@ def test_portfolio_config_runs_the_frozen_pre_registered_signal():
     assert portfolio["strategy"] == signal["strategy"] == "trend_breakout"
     PortfolioLimits.from_mapping(portfolio["portfolio"])  # every key is a real limit
     assert set(portfolio["portfolio"]) <= set(PortfolioLimits().to_dict())
+
+
+def test_governor_defaults_follow_the_portfolio_and_keep_stricter_operator_caps():
+    from signal_bot.risk.portfolio import governor_defaults
+
+    limits = PortfolioLimits()
+    d = governor_defaults(limits, {})
+    assert d == {
+        "max_concurrent_positions": 6,
+        "daily_loss_limit_r": pytest.approx(-6.0),
+        "max_trades_per_day": 18,
+        "max_consecutive_losses": 15,
+    }
+    # an operator who set MAX_CONCURRENT_POSITIONS=1 and DAILY_LOSS_LIMIT_R=-2 keeps them
+    d = governor_defaults(
+        limits, {"max_concurrent_positions": 1, "daily_loss_limit_r": -2.0, "log_level": "INFO"}
+    )
+    assert d["max_concurrent_positions"] == 1 and d["daily_loss_limit_r"] == -2.0
+    # a looser explicit value cannot exceed the researched portfolio
+    assert (
+        governor_defaults(limits, {"max_concurrent_positions": 20})["max_concurrent_positions"] == 6
+    )
+
+
+def test_operator_caps_only_tighten_the_researched_limits():
+    from signal_bot.risk.portfolio import apply_operator_caps
+
+    limits = PortfolioLimits()
+    capped = apply_operator_caps(
+        limits, {"risk_pct_per_trade": 0.25, "max_concurrent_positions": 1}
+    )
+    assert capped.risk_per_trade == pytest.approx(0.0025) and capped.max_positions == 1
+    loose = apply_operator_caps(limits, {"risk_pct_per_trade": 1.0, "max_concurrent_positions": 9})
+    assert loose == limits
+    assert apply_operator_caps(limits, {}) == limits  # unset settings never apply

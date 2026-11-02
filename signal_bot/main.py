@@ -50,7 +50,12 @@ from signal_bot.observability.server import OpsServer
 from signal_bot.observability.status import StatusService
 from signal_bot.provenance import git_info, package_version
 from signal_bot.risk.governor import RiskGovernor
-from signal_bot.risk.portfolio import PortfolioLimits, exposure_summary
+from signal_bot.risk.portfolio import (
+    PortfolioLimits,
+    apply_operator_caps,
+    exposure_summary,
+    governor_defaults,
+)
 from signal_bot.signals.risk_sizer import RiskSizer
 from signal_bot.signals.sweep_detector import SweepDetector
 from signal_bot.signals.trend import TrendParams
@@ -405,7 +410,10 @@ async def main() -> None:
         pipeline = None
         if trend_mode:
             params = TrendParams.from_mapping(doc.get("params", {}))
-            limits = PortfolioLimits.from_mapping(doc.get("portfolio"))
+            explicit = {k: getattr(settings, k) for k in settings.model_fields_set}
+            limits = apply_operator_caps(
+                PortfolioLimits.from_mapping(doc.get("portfolio")), explicit
+            )
             portfolio = LivePortfolio(adapter, store, history, AsyncSessionLocal, limits)
             pipeline = TrendPipeline(
                 TrendSignalGenerator(params, history, settings.trend_min_history_bars),
@@ -423,6 +431,21 @@ async def main() -> None:
                 max_candle_lag=settings.max_candle_lag_seconds,
             )
             governor.portfolio_check = pipeline.recheck
+            governor.project_open_risk = False
+            for key, value in governor_defaults(limits, explicit).items():
+                setattr(
+                    governor,
+                    key,
+                    Decimal(str(value)) if key == "daily_loss_limit_r" else int(value),
+                )
+            logger.info(
+                "Governor limits for the trend portfolio: positions=%s daily_loss=%sR "
+                "trades/day=%s consecutive_losses=%s",
+                governor.max_concurrent_positions,
+                governor.daily_loss_limit_r,
+                governor.max_trades_per_day,
+                governor.max_consecutive_losses,
+            )
 
             async def portfolio_monitor():
                 return exposure_summary(await portfolio.state(), limits)

@@ -401,3 +401,49 @@ async def test_daily_loss_budget_allows_when_room_remains(governor, db_session):
     await _seed_risk_state(db_session, daily_pnl_r=Decimal("-1.0"))
     await _seed_signal(db_session, status="triggered")
     assert (await governor.check(None))[0] is True  # -1 - 2 = -3, not beyond -3
+
+
+@pytest.mark.asyncio
+async def test_trend_portfolio_replaces_the_open_risk_projection(governor, db_session):
+    """With the portfolio's own open-risk cap wired in, the 1R-per-position projection is off."""
+    await _seed_risk_state(db_session, daily_pnl_r=Decimal("-1.5"))
+    await _seed_signal(db_session, status="triggered")
+    governor.project_open_risk = False
+    allowed, reason = await governor.check(None)
+    assert allowed, reason
+
+
+@pytest.mark.asyncio
+async def test_portfolio_recheck_gates_trend_signals_and_fails_closed(governor, db_session):
+    await _seed_risk_state(db_session)
+    sig = type("Sig", (), {"strategy": "trend_breakout"})()
+
+    async def refuse(signal):
+        return False, "portfolio:correlated_risk"
+
+    governor.portfolio_check = refuse
+    assert await governor.check(sig) == (False, "portfolio:correlated_risk")
+
+    async def broken(signal):
+        raise RuntimeError("venue down")
+
+    governor.portfolio_check = broken
+    assert await governor.check(sig) == (False, "portfolio_unavailable")
+    # other strategies are not subject to the portfolio rules
+    other = type("Sig", (), {"strategy": "liquidity_sweep"})()
+    assert (await governor.check(other))[0] is True
+
+
+@pytest.mark.asyncio
+async def test_portfolio_drawdown_breaker_opens_and_clears(governor):
+    summary = {"entries_allowed": False, "drawdown_pct": 21.0, "limits": {"drawdown_halt": 0.2}}
+
+    async def monitor():
+        return summary
+
+    governor.portfolio_monitor = monitor
+    await governor.check_portfolio_drawdown()
+    assert "portfolio_drawdown" in governor.breakers
+    summary["entries_allowed"] = True
+    await governor.check_portfolio_drawdown()
+    assert "portfolio_drawdown" not in governor.breakers

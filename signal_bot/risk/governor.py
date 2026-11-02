@@ -99,6 +99,9 @@ class RiskGovernor:
         self.portfolio_check = None
         self.portfolio_monitor = None
         self.portfolio_strategies: frozenset[str] = frozenset({"trend_breakout"})
+        # The "every open stop is hit today" projection; the trend portfolio replaces it
+        # with its own open-risk cap (risk/portfolio.py), so main turns it off there.
+        self.project_open_risk = True
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -282,7 +285,7 @@ class RiskGovernor:
             # Worst case if every open stop and this new trade's stop are hit (1R each):
             # stops a breach caused by trades that were already open when the limit hit.
             projected = state.daily_pnl_r - Decimal(open_count + 1)
-            if projected < self.daily_loss_limit_r:
+            if self.project_open_risk and projected < self.daily_loss_limit_r:
                 return (
                     f"daily_loss_budget exhausted: {state.daily_pnl_r}R realised with "
                     f"{open_count} open trade(s) could reach {projected}R < {self.daily_loss_limit_r}R"

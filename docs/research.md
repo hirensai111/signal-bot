@@ -77,7 +77,8 @@ the 95th percentile of random entries on every symbol.
 | `liquidity_sweep.toml` | The production strategy. It is *not* re-implemented: `backtest/runner.py:replay_live_signals` feeds candles through the live HTF scanner, microstructure engine, sweep detector and risk sizer, so research and production cannot drift apart. |
 | `exhaustion_reversion.toml` | Fades climactic runs (N same-direction bars covering k×ATR with a volume spike), gated by the no-trade regime filter. |
 | `exhaustion_reversion_unfiltered.toml` | The same without the filter, to measure what the filter contributes. |
-| `trend_breakout.toml` | 4h Donchian breakout in the direction of the 200-bar EMA, on above-average volume, with a 2 ATR initial stop and a 3 ATR constant-distance trailing stop (what Delta's `bracket_trail_amount` does) and no fixed target. |
+| `trend_breakout.toml` | 4h Donchian breakout in the direction of the 200-bar EMA, on above-average volume, with a 2 ATR initial stop and a 3 ATR trailing stop that moves once per completed bar, and no fixed target. |
+| `trend_portfolio.toml` | The same frozen signal run as one portfolio on shared capital over the Delta India perpetuals, with the portfolio rules in `[portfolio]` (see *Portfolio* below). This is the default live strategy config. |
 | `liquidity_sweep_v2.toml` | The production sweep entries and stops, skipping stops under 40 bps and replacing the far HTF target with a fixed R target or a trailing exit. |
 
 The **no-trade regime filter** (`RegimeFilter`) wraps any strategy and vetoes trades
@@ -149,7 +150,7 @@ What the reports show:
   * Signal R stayed near zero (|t| < 1) under every exit tried, so there is no edge to manage. It was dropped without using the holdout.
 * **Trend breakout 0.2.0** (`trend_breakout.toml`): long or short only in the direction of the EMA200, and only on 1.5× average volume.
   * 4h Donchian 55 breakout, 2 ATR initial stop, 3 ATR trailing stop, no target.
-  * The trailing stop is constant-distance, which is what Delta's `bracket_trail_amount` places on the exchange.
+  * The trailing stop is *stepped*: after each completed bar it moves to the best price so far minus 3 ATR (fixed at entry), never looser. This is not Delta's `bracket_trail_amount`, which trails continuously from the live price; see *Trailing stops in live trading* below.
 
 ### Trend breakout 0.2.0 results
 
@@ -187,11 +188,128 @@ Reports:
   * It has been looked at twice: once per coin set, with the same frozen config.
   * Any further change has to be judged on data that does not exist yet, which means forward paper trading.
 
-### Next step
+### Next step (done in 2.1)
 
-Run trend breakout 0.2.0 as a small, diversified **paper** portfolio across the liquid Delta perpetuals. That needs:
+The paper-trading pieces this called for are built and described below:
 
-* a 4h signal generator;
-* trailing-stop support in the paper broker and the Delta bracket (`bracket_trail_amount`).
+* a live 4h signal generator;
+* trailing stops through the whole execution path;
+* portfolio-level risk.
 
-Go live only if a few months of paper results confirm a positive expectancy at the costs the session reports measure.
+The portfolio backtest also changes the picture: see *Portfolio*.
+
+## Live parity (`signals/trend.py`, `signals/trend_live.py`)
+
+There is one implementation of the entry rule, `signals.trend.trend_decisions`.
+
+* **Research:** `TrendBreakout.generate` calls it on the full history. A regression check gave identical intents on 11 coins x 57 months and an identical experiment report.
+* **Live:** the trend pipeline calls it on the completed 4h candles it holds and keeps the newest bar's decision.
+* **Why the two agree:** every indicator is causal and computed left to right, so a bar's value does not depend on later bars.
+
+| Parity test | Result |
+|---|---|
+| Real Binance BTCUSDT 4h bars, 2024-01..2025-06 (3282 bars, `tests/fixtures`), fed one candle at a time | Every decision identical, bit for bit (bar, side, entry, stop, trail) |
+| Live seeded with only 1000 bars (the REST warm-up) vs research running since the first bar | Same decisions; stop and trail within 1e-9 relative (EMA/ATR start-up residual) |
+| Research on resampled 1h data vs live on native 4h klines | Same decisions (synthetic) |
+| Native Binance 4h klines vs 1h resampled to 4h (BTC, DOGE, 6 months of real data) | OHLC identical; volume differs by at most one float ULP (2.2e-16) on some bars. A decision could differ only if volume sat within 1e-16 of 1.5x its mean |
+| **Full stack:** 1500 real 4h bars through pipeline, risk governor, execution engine, simulated venue, trailing manager and outcome monitor | The same 28 trades as the research backtest: same signal bar, exit bar and kind of exit (`tests/test_live_replay.py`) |
+
+What can still differ in live trading, by design:
+
+* **Completed candles only.** A bar trades only if it is decided within `MAX_CANDLE_LAG_SECONDS` of its close. Backfilled or late bars update history but never trade, because research executes at the next open.
+* **Warm-up.** A symbol needs 1000 completed bars (`TREND_MIN_HISTORY_BARS`), loaded from Binance REST at start. The EMA200's dependence on its first bar decays to about 5e-5 by then. If Binance REST is unreachable (HTTP 451 in some regions), the symbol stays "warming up" and does not trade.
+* **Cross-venue basis.**
+  * The engine places entry and stops on Delta at the Binance levels plus the basis measured at submission: Delta's mid minus the Binance close. That measurement includes the few seconds of price movement since the close, and submission aborts beyond 0.15%.
+  * The trailing manager keeps that basis for the life of the trade.
+  * The full-stack replay found this: when a replayed entry executed at the *next bar's open* instead of seconds after the close, the bar-to-bar gap became a permanent 0.12% stop offset and changed one exit. At production timing the replay matches exactly.
+* **Market data source.** Live candles must come from the production Binance feed the research used. `BINANCE_TESTNET` now defaults to false; it only selects market data, since the bot never trades on Binance. The trend mode refuses to start on the synthetic testnet feed.
+
+## Trailing stops in live trading
+
+The researched exit is a **stepped** trail. After every completed bar:
+
+* the stop moves to max(initial stop, highest high since the entry bar opened - 3 ATR) for a long, mirrored for a short;
+* it applies to the next bar, and it never loosens.
+
+`TRAIL_MODE=stepped` (default) reproduces it exactly:
+
+* the protective stop is always a resting stop-market order on the exchange;
+* `execution/trailing.py` amends it after each 4h close;
+* `tests/test_trailing.py` checks the live stop equals the fill model's stop on every bar.
+
+| Situation | What happens |
+|---|---|
+| Amend refused by the venue | The previous stop stays in place (the position is still protected), an alert is sent, and the next bar retries |
+| Amend outcome unknown (timeout) | The venue's stop is re-read and recorded |
+| Restart, or bars missed while down | Reconciliation re-derives the stop from candle history and amends a looser venue stop |
+| A tighter stop on the venue (e.g. moved by an operator) | Adopted; the stop never loosens |
+| The re-derived stop is already through the market | The position is closed at market, as the fill model would gap out at the open |
+| Venue lost the stop entirely | The recovery stop is placed at the current trailed level, not the initial one |
+| Strategy's last bar (`max_hold_bars` = 180, 30 days) | Time stop: closed at market and recorded as `time_stop` |
+
+`TRAIL_MODE=native` sends Delta's `bracket_trail_amount` instead.
+
+* That stop trails *continuously* from the live price, and Delta documents it as "required if bracket stop price is empty", so there is no separate 2 ATR initial stop. It is a different exit from the researched one and has not been backtested.
+* Delta does not document the trail amount's sign or how a trailing stop appears on orders and positions.
+* `python -m signal_bot.delta.trail_check --yes-place-testnet-orders` measures all of this on testnet (one contract per leg, always flattened). It also checks that a bracket stop's price can be edited (`PUT /v2/orders`), which stepped mode depends on.
+* Run it with a testnet key before any live use, and record the output in the runbook.
+
+## Portfolio (`risk/portfolio.py`, `research/portfolio.py`)
+
+Eleven single-symbol backtests, each with its own $10k and every signal taken, are not one executable portfolio. The portfolio rules decide, at each 4h close, which of that bar's breakouts one shared account can take. The same pure function runs:
+
+* live, before batching, with a governor re-check just before submission;
+* in the research simulator, which replays all symbols on one timeline with the unchanged fill model and stepped trail.
+
+| Rule (`trend_portfolio.toml`, set a priori) | Value | Why |
+|---|---|---|
+| Risk per trade | 0.5% of marked-to-market equity | The researched per-trade risk |
+| Size | Whole Delta contracts, rounded down, capped by Delta's `position_size_limit` | What can actually be ordered (BTC 0.001, ETH 0.01, BNB/LTC 0.1, DOGE 100, others 1 per contract) |
+| Positions | At most 6, one per symbol | About half the universe |
+| Open risk | At most 3% of equity: the loss if every stop is hit from the current price | 6 x 0.5% |
+| Correlated risk | sqrt(r' C r) <= 2% of equity, with C the 30-day correlation of 4h returns (unknown pairs = 1) | At typical crypto correlations (0.7) this allows four same-side positions; a long and a short in correlated coins partly offset |
+| Gross leverage | Notional at most 3x equity, each position at 5x isolated margin | Margin in use stays under 60% |
+| Margin buffer | Stops beyond half the distance to liquidation are refused | The stop, not liquidation, closes a loser |
+| Simultaneous entries | At most 3 per bar close, ranked by breakout strength (ATRs beyond the channel), ties by symbol | Breakouts cluster: arrival order on the socket must not decide |
+| Drawdown | Risk halved at 10% from the equity peak; entries stop at 20% (governor breaker `portfolio_drawdown`) | Aggregate loss control |
+| Universe | Delta India perpetuals as listed (`research/delta_universe.json`), tradable only from each listing date | Delta listed BTC on 2023-12-18 and the others in April 2024 |
+
+The limits gate **new** entries. Open risk is measured from the current price to the current stop, and a 3 ATR trail on a winner can sit further from the price than the 2 ATR initial stop. Open risk therefore drifts above the entry limits as winners run: up to 5.6% (development) and 6.9% (holdout). No position is cut to bring it back, because that would be a different strategy.
+
+In trend mode the 2.0 governor defaults are derived from these rules instead of being taken from the sweep era: 6 positions, -6R per day, 18 trades per day, a kill switch after 15 consecutive losses. The 2.0 defaults were 3 positions, -3R and 5 losses. A trend strategy that wins about 37% of trades loses five in a row routinely, so the 2.0 settings would have halted it repeatedly and capped it at 3 positions. Values an operator sets explicitly are kept when stricter.
+
+### Portfolio results
+
+Each run uses the same frozen signal and the same pre-registered rules (commit `1653067`, config hash `875c250051698836`). The first two runs below cover the development period (2021-01..2025-09). The third is the holdout year: it is the third look at that year and the first at the portfolio level.
+
+| Run | Trading period | Return | Max drawdown | Trades | R per trade (95% CI) | 90-day windows >= 0 | Random percentile | 11 backtests summed onto one account |
+|---|---|---|---|---|---|---|---|---|
+| Development, Delta listing dates | 2023-12-18..2025-09 | +25.1% (13.4%/yr, Sharpe 0.92) | -10.3% | 353 | +0.15 (-0.00 to +0.30) | 57% | 92 | +37.4% from 599 trades |
+| Development, every coin treated as listed since 2021 | 2021-01..2025-09 | +22.3% (4.3%/yr, Sharpe 0.39) | -18.7%, 1048-day drawdown | 1170 | +0.08 (0.00 to +0.17) | 53% | 94 | +64.9% from 1762 trades |
+| **Holdout** | 2025-10..2026-09 | **+3.4%** (Sharpe 0.24) | **-16.4%**, 313-day drawdown | 250 | +0.06 (-0.14 to +0.25) | 2 of 4 | 84 | +19.6% from 381 trades |
+
+* "Random percentile" is the share of 50 random-entry portfolios beaten. Those portfolios use the same portfolio rules, symbols, trade counts and ATR stop and trail geometry.
+* "11 backtests summed onto one account" is what treating the per-coin results as one portfolio would claim.
+
+Reports:
+
+* [development](reports/trend_portfolio-dev-875c250051698836.json)
+* [development without listing dates](reports/trend_portfolio-dev-unlisted-875c250051698836.json)
+* [holdout](reports/trend_portfolio-holdout-875c250051698836.json)
+
+What it shows:
+
+* **Shared capital changes the answer.**
+  * The holdout's per-coin results (+0.10R per trade across 11 coins, 7 profitable) summed to +19.6% on one account.
+  * Executed as one account the year made +3.4%, with a -16.4% drawdown that lasted most of the year.
+  * Breakouts arrive together: about 40% of decision bars had two or more candidates, up to 10. They are also correlated, so the correlation cap refused the most entries (134 in the holdout).
+* **Not validated.** Every run fails two criteria: at least 60% of 90-day windows non-negative, and beating 95% of random-entry portfolios.
+* **What it does have.**
+  * Expectancy has stayed positive in every run, but its interval includes zero.
+  * It beat 84-94% of random portfolios.
+  * With listing dates respected it still made money at 3x costs on development data. The holdout broke even between 2x and 3x costs (+1.7% at 2x, -0.5% at 3x).
+* **Two issues in my own first report.** Both were found and fixed before the final runs, and the superseded log entries are kept.
+  * Windows and annual figures included 2021-2023, before Delta listed anything, which counted the flat curve as "non-negative" windows.
+  * The independent-backtest comparison ignored listing dates.
+
+Forward paper trading is now the only clean test left. The trend portfolio is the default `STRATEGY_CONFIG` for exactly that; nothing here supports live trading.

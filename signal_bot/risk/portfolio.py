@@ -313,3 +313,48 @@ def with_marks(state: PortfolioState, marks: Mapping[str, float]) -> PortfolioSt
         state,
         positions=tuple(replace(p, mark=marks.get(p.symbol, p.mark)) for p in state.positions),
     )
+
+
+def governor_defaults(limits: PortfolioLimits, explicit: dict[str, Any]) -> dict[str, Any]:
+    """Risk-governor limits that do not silently reshape the researched portfolio.
+
+    The 2.0 defaults (3 positions, -3R per day, a kill switch after 5 losses) were set
+    for the sweep at 1% risk.  For the trend portfolio they would cap it at 3 positions
+    and halt it routinely (it wins ~37% of trades, so 5 losses in a row are common).
+    Defaults are derived from the portfolio rules instead; values an operator set
+    explicitly (``explicit``) are kept and the stricter one wins.
+    """
+    per_trade_r = limits.max_open_risk / limits.risk_per_trade  # open-risk cap in R
+    derived = {
+        "max_concurrent_positions": limits.max_positions,
+        "daily_loss_limit_r": -per_trade_r,
+        "max_trades_per_day": limits.max_entries_per_bar * 6,  # six 4h closes a day
+        "max_consecutive_losses": 15,  # 0.63**15 ~ 0.1%: a real anomaly, not variance
+    }
+    out = dict(derived)
+    for key, value in explicit.items():
+        if key not in derived:
+            continue
+        if key == "daily_loss_limit_r":
+            out[key] = max(value, derived[key])  # less negative = stricter
+        else:
+            out[key] = min(value, derived[key])
+    return out
+
+
+def apply_operator_caps(limits: PortfolioLimits, explicit: dict[str, Any]) -> PortfolioLimits:
+    """Stricter operator settings override the researched limits (never looser).
+
+    ``RISK_PCT_PER_TRADE`` (percent) caps ``risk_per_trade``; ``MAX_CONCURRENT_POSITIONS``
+    caps ``max_positions``.  Only values the operator set explicitly count.
+    """
+    out = limits
+    if "risk_pct_per_trade" in explicit:
+        out = replace(
+            out, risk_per_trade=min(out.risk_per_trade, float(explicit["risk_pct_per_trade"]) / 100)
+        )
+    if "max_concurrent_positions" in explicit:
+        out = replace(
+            out, max_positions=min(out.max_positions, int(explicit["max_concurrent_positions"]))
+        )
+    return out

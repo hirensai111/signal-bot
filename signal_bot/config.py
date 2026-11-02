@@ -104,7 +104,7 @@ class Settings(BaseSettings):
 
     # Strategy release.  The config's ``strategy`` field selects the live signal source:
     # "trend_breakout" (4h trend portfolio) or "liquidity_sweep" (the 2.0 strategy).
-    strategy_config: str = "signal_bot/research/strategies/trend_breakout.toml"
+    strategy_config: str = "signal_bot/research/strategies/trend_portfolio.toml"
 
     # Trailing stops: "stepped" moves the exchange-resident stop at each completed bar,
     # exactly as researched; "native" uses Delta's bracket_trail_amount (continuous,
