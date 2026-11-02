@@ -149,7 +149,13 @@ def test_dashboards_and_alerts_only_reference_real_metrics():
         + Path("deploy/prometheus/alerts.yml").read_text()
     )
     used = set(re.findall(r"signalbot_[a-z_]+", text))
-    assert used and used <= names, used - names
+    # Written by deploy/backup/backup.sh and exported by node-exporter, not by the bot
+    # (tests/test_deploy.py checks the script really emits them).
+    external = {
+        "signalbot_backup_last_success_timestamp_seconds",
+        "signalbot_backup_last_size_bytes",
+    }
+    assert used and used - external <= names, used - external - names
 
 
 async def test_body_cannot_override_audited_actor_or_ip(ops):
