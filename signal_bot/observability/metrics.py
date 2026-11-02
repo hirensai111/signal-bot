@@ -6,9 +6,28 @@ bundled Grafana dashboard (deploy/grafana) can be imported unchanged.
 
 from __future__ import annotations
 
-from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
+from prometheus_client import (
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    PlatformCollector,
+    ProcessCollector,
+    generate_latest,
+)
 
 REGISTRY = CollectorRegistry(auto_describe=True)
+# process_start_time_seconds (restarts), process_resident_memory_bytes, CPU, open fds.
+ProcessCollector(registry=REGISTRY)
+PlatformCollector(registry=REGISTRY)
+
+# --- build ------------------------------------------------------------------
+BUILD_INFO = Gauge(
+    "signalbot_build_info",
+    "Always 1; labels identify what is running",
+    ["version", "commit", "strategy", "strategy_version", "exec_mode", "venue", "delta_mode"],
+    registry=REGISTRY,
+)
 
 # --- market data -----------------------------------------------------------
 MARKET_DATA_AGE = Gauge(
@@ -174,6 +193,86 @@ PORTFOLIO_DRAWDOWN = Gauge(
 PAPER_EQUITY = Gauge(
     "signalbot_paper_equity",
     "Mark-to-market equity of the paper account",
+    registry=REGISTRY,
+)
+PORTFOLIO_EQUITY = Gauge(
+    "signalbot_portfolio_equity",
+    "Marked-to-market equity the portfolio rules size on",
+    registry=REGISTRY,
+)
+PORTFOLIO_PEAK_EQUITY = Gauge(
+    "signalbot_portfolio_peak_equity",
+    "Highest marked-to-market equity seen (drawdown reference)",
+    registry=REGISTRY,
+)
+PORTFOLIO_POSITIONS = Gauge(
+    "signalbot_portfolio_positions",
+    "Positions counted by the portfolio rules (filled or in flight)",
+    registry=REGISTRY,
+)
+PORTFOLIO_GROSS_LEVERAGE = Gauge(
+    "signalbot_portfolio_gross_leverage_ratio",
+    "Total notional divided by equity",
+    registry=REGISTRY,
+)
+PORTFOLIO_LIMIT = Gauge(
+    "signalbot_portfolio_limit",
+    "Portfolio rule thresholds. Entry limits gate NEW entries only; open risk can exceed them",
+    ["limit"],
+    registry=REGISTRY,
+)
+
+# --- trend pipeline ---------------------------------------------------------
+TREND_SYMBOL_READY = Gauge(
+    "signalbot_trend_symbol_ready",
+    "1 if the symbol has enough completed 4h history to trade",
+    ["symbol"],
+    registry=REGISTRY,
+)
+TREND_SYMBOL_TRADABLE = Gauge(
+    "signalbot_trend_symbol_tradable",
+    "1 if the venue lists the symbol as a live perpetual",
+    ["symbol"],
+    registry=REGISTRY,
+)
+TREND_HISTORY_BARS = Gauge(
+    "signalbot_trend_history_bars",
+    "Completed 4h bars held for the symbol",
+    ["symbol"],
+    registry=REGISTRY,
+)
+TREND_LAST_BAR_CLOSE = Gauge(
+    "signalbot_trend_last_bar_close_timestamp_seconds",
+    "Close time of the newest completed 4h bar processed for the symbol",
+    ["symbol"],
+    registry=REGISTRY,
+)
+TREND_CANDLES = Counter(
+    "signalbot_trend_candles_total",
+    "4h candles offered to the trend pipeline, by outcome (appended or why refused)",
+    ["symbol", "outcome"],
+    registry=REGISTRY,
+)
+TREND_BATCHES = Counter(
+    "signalbot_trend_batches_total",
+    "Bar-close decision batches evaluated by the portfolio rules",
+    registry=REGISTRY,
+)
+
+# --- protection & reconciliation ------------------------------------------------
+POSITIONS_UNPROTECTED = Gauge(
+    "signalbot_positions_unprotected",
+    "Filled positions the last reconciliation found without a stop on the venue",
+    registry=REGISTRY,
+)
+RECONCILIATION_LAST_SUCCESS = Gauge(
+    "signalbot_reconciliation_last_success_timestamp_seconds",
+    "Unix time of the last successful reconciliation pass",
+    registry=REGISTRY,
+)
+RECONCILIATION_FAILURES = Counter(
+    "signalbot_reconciliation_failures_total",
+    "Reconciliation passes that raised",
     registry=REGISTRY,
 )
 

@@ -42,3 +42,16 @@ def test_invalid_trailing_settings_are_refused_at_startup():
     s = Settings(_env_file=None, trail_mode="sometimes", delta_trail_amount_sign="maybe")
     problems = " ".join(s.validate_for_startup())
     assert "TRAIL_MODE" in problems and "DELTA_TRAIL_AMOUNT_SIGN" in problems
+
+
+def test_strategy_config_resolves_inside_an_installed_package(tmp_path, monkeypatch):
+    """In the Docker image the working directory is not the repository."""
+    from signal_bot.main import resolve_strategy_config
+
+    monkeypatch.chdir(tmp_path)
+    path = resolve_strategy_config("signal_bot/research/strategies/trend_portfolio.toml")
+    assert path.is_file() and path.name == "trend_portfolio.toml"
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        resolve_strategy_config("signal_bot/research/strategies/does_not_exist.toml")

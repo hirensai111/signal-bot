@@ -52,6 +52,7 @@ from signal_bot.execution.orders import OrderState
 from signal_bot.features.candle_history import CandleHistory
 from signal_bot.ingest.binance_ws import Kline
 from signal_bot.observability import metrics
+from signal_bot.observability.logging import bind
 from signal_bot.signals.trend import trail_stop
 
 logger = logging.getLogger(__name__)
@@ -134,7 +135,8 @@ class TrailingStopManager:
             return {"order": coid, "action": "in_progress"}
         self._busy.add(coid)
         try:
-            return await self._sync(order, venue, verify)
+            with bind(order_id=coid, correlation_id=order.correlation_id, symbol=order.symbol):
+                return await self._sync(order, venue, verify)
         finally:
             self._busy.discard(coid)
 

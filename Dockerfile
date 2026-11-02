@@ -11,7 +11,11 @@ ENV PYTHONUNBUFFERED=1 \
     SIGNAL_BOT_COMMIT=${SIGNAL_BOT_COMMIT} \
     LOG_FORMAT=json \
     OPS_HOST=0.0.0.0
-RUN useradd --create-home --uid 10001 bot
+RUN useradd --create-home --uid 10001 bot \
+ && mkdir -p /home/bot/data && chown bot:bot /home/bot/data
+# ^ the bot's named volume is initialised from this directory, so it is writable by the
+#   unprivileged user (otherwise Docker creates it root-owned and the paper broker cannot
+#   save its state).
 COPY --from=build /dist/*.whl /tmp/
 RUN pip install --no-cache-dir /tmp/*.whl && rm /tmp/*.whl
 USER bot

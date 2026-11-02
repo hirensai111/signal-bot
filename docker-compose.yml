@@ -1,56 +1,184 @@
-# Paper-trading stack: bot + PostgreSQL + Prometheus + Grafana.
-#   cp .env.example .env   # set OPERATOR_TOKEN (required: the ops port is published)
-#   SIGNAL_BOT_COMMIT=$(git rev-parse HEAD) docker compose up --build
-# Control room: http://127.0.0.1:8080  Grafana: http://127.0.0.1:3000  Prometheus: http://127.0.0.1:9090
-# Every port is bound to localhost only.
+# Signal Bot paper-trading deployment: bot + PostgreSQL + Prometheus + Alertmanager
+# + Grafana + Loki/Alloy + node-exporter + daily backups.  See docs/deployment.md.
+#
+#   cp deploy/paper.env.example .env      # fill in the secrets it lists
+#   SIGNAL_BOT_COMMIT=$(git rev-parse HEAD) docker compose up -d --build
+#
+# Every port is bound to 127.0.0.1.  Remote access is through Tailscale
+# (`tailscale serve`, set up by deploy/bootstrap-ubuntu.sh); nothing is public.
+#   Grafana        127.0.0.1:3000   dashboards, logs (read-only for viewers)
+#   Control room   127.0.0.1:8080   status; halt/resume need OPERATOR_TOKEN
+#   Prometheus     127.0.0.1:9090   Alertmanager 127.0.0.1:9093   Loki 127.0.0.1:3100
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "20m", max-file: "5"}
+
 services:
   postgres:
     image: postgres:16
     environment:
       POSTGRES_USER: signalbot
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-signalbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: signal_bot
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "signalbot"]
+      test: ["CMD", "pg_isready", "-U", "signalbot", "-d", "signal_bot"]
       interval: 5s
       retries: 10
+    restart: unless-stopped
+    logging: *logging
+
+  # Idempotent: (re)creates the read-only role Grafana uses for trade tables.
+  db-roles:
+    image: postgres:16
+    environment:
+      PGHOST: postgres
+      PGUSER: signalbot
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: signal_bot
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?set GRAFANA_DB_PASSWORD in .env}
+    volumes: ["./deploy/postgres/roles.sh:/roles.sh:ro"]
+    entrypoint: ["sh", "/roles.sh"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+    logging: *logging
 
   bot:
     build:
       context: .
       args:
         SIGNAL_BOT_COMMIT: ${SIGNAL_BOT_COMMIT:-unknown}
+    image: signal-bot:${SIGNAL_BOT_COMMIT:-local}
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://signalbot:${POSTGRES_PASSWORD:-signalbot}@postgres:5432/signal_bot
-      EXEC_MODE: ${EXEC_MODE:-paper}
+      DATABASE_URL: postgresql+asyncpg://signalbot:${POSTGRES_PASSWORD}@postgres:5432/signal_bot
+      # Paper only: not taken from .env, and PAPER_ONLY makes the bot refuse anything else.
+      EXEC_MODE: paper
+      PAPER_ONLY: "true"
       OPS_HOST: 0.0.0.0
+      LOG_FORMAT: json
       PAPER_STATE_PATH: /home/bot/data/paper_state.json
     volumes: [botdata:/home/bot/data]
     depends_on:
-      postgres:
-        condition: service_healthy
+      postgres: {condition: service_healthy}
     ports: ["127.0.0.1:8080:8080"]
     restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *logging
 
   prometheus:
     image: prom/prometheus:v2.53.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # The forward test runs for months: keep a year, bounded in size.
+      - --storage.tsdb.retention.time=400d
+      - --storage.tsdb.retention.size=10GB
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
     ports: ["127.0.0.1:9090:9090"]
+    restart: unless-stopped
+    logging: *logging
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_API_URL: ${TELEGRAM_API_URL:-https://api.telegram.org}
+      DEADMANS_SWITCH_URL: ${DEADMANS_SWITCH_URL:-}
+    volumes:
+      - ./deploy/alertmanager:/etc/alertmanager-src:ro
+      - alertmanager-data:/alertmanager
+    entrypoint: ["sh", "/etc/alertmanager-src/entrypoint.sh"]
+    ports: ["127.0.0.1:9093:9093"]
+    restart: unless-stopped
+    logging: *logging
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+)($|/)
+      # the backup service writes signalbot_backup_* here
+      - --collector.textfile.directory=/textfile
+    pid: host
+    volumes: ["/:/host:ro", "./backups/metrics:/textfile:ro"]
+    restart: unless-stopped
+    logging: *logging
+
+  loki:
+    image: grafana/loki:3.3.2
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./deploy/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    ports: ["127.0.0.1:3100:3100"]
+    restart: unless-stopped
+    logging: *logging
+
+  # Collects every container's stdout (the bot logs JSON) and ships it to Loki.
+  alloy:
+    image: grafana/alloy:v1.5.1
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./deploy/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on: [loki]
+    restart: unless-stopped
+    logging: *logging
 
   grafana:
     image: grafana/grafana:11.1.0
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://127.0.0.1:3000/}
       GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_DEFAULT_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/signal-bot-overview.json
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD}
+      CONTROL_ROOM_URL: ${CONTROL_ROOM_URL:-http://127.0.0.1:8080/}
     volumes:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus, loki, db-roles]
     ports: ["127.0.0.1:3000:3000"]
+    restart: unless-stopped
+    logging: *logging
+
+  # Daily pg_dump plus the paper broker state, kept BACKUP_RETENTION_DAYS days in
+  # ./backups on the host (sync that directory off the server: docs/deployment.md).
+  backup:
+    image: postgres:16
+    environment:
+      PGHOST: postgres
+      PGUSER: signalbot
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: signal_bot
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - ./deploy/backup/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+      - botdata:/botdata:ro
+    entrypoint: ["sh", "/backup.sh"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *logging
 
 volumes:
   pgdata:
   botdata:
+  prometheus-data:
+  alertmanager-data:
+  loki-data:
+  alloy-data:
+  grafana-data:

@@ -16,7 +16,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-_CONTEXT_FIELDS = ("correlation_id", "signal_id", "order_id", "event_id")
+_CONTEXT_FIELDS = ("correlation_id", "signal_id", "order_id", "event_id", "symbol")
 _ctx: dict[str, contextvars.ContextVar[str | None]] = {
     name: contextvars.ContextVar(name, default=None) for name in _CONTEXT_FIELDS
 }

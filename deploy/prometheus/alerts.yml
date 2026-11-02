@@ -1,49 +1,223 @@
+# Alert rules for the paper deployment.  Routed by Alertmanager to Telegram
+# (deploy/alertmanager).  Tested with `promtool test rules alerts.test.yml`.
+# component="bot" alerts are muted while BotDown fires (they would be consequences).
 groups:
-  - name: signal-bot
+  - name: availability
     rules:
       - alert: BotDown
         expr: up{job="signal-bot"} == 0
-        for: 1m
+        for: 2m
         labels: {severity: critical}
-        annotations: {summary: "Signal bot is not being scraped"}
-      - alert: KillSwitchEngaged
-        expr: signalbot_kill_switch_active == 1
-        labels: {severity: critical}
-        annotations: {summary: "Kill switch engaged: all new orders refused"}
-      - alert: RiskGovernorUnhealthy
-        expr: signalbot_risk_governor_healthy == 0
-        for: 1m
-        labels: {severity: critical}
-        annotations: {summary: "Risk governor cannot evaluate limits (failing closed)"}
-      - alert: ProtectiveOrderFailure
-        expr: increase(signalbot_protective_order_failures_total[10m]) > 0
-        labels: {severity: critical}
-        annotations: {summary: "An entry filled without a confirmed stop"}
-      - alert: UnknownSubmission
-        expr: increase(signalbot_order_submission_unknown_total[10m]) > 0
-        labels: {severity: warning}
-        annotations: {summary: "An order submission outcome was ambiguous"}
+        annotations:
+          summary: "Signal bot is down or not answering (no metrics for 2 minutes)"
+          action: "docker compose ps; docker compose logs --tail=100 bot. It restarts automatically unless it is crash-looping."
+      - alert: BotRestarted
+        expr: changes(process_start_time_seconds{job="signal-bot"}[15m]) > 0
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "Signal bot restarted in the last 15 minutes"
+          action: "Check the logs for a crash (Grafana > Logs, level=CRITICAL). Startup reconciliation re-derives orders and stops."
+      - alert: NotPaperTrading
+        expr: signalbot_build_info{exec_mode!="paper"} == 1
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "The paper deployment is running with exec_mode={{ $labels.exec_mode }}"
+          action: "Stop it now: docker compose stop bot. This deployment must only run EXEC_MODE=paper."
+      - alert: TaskOrBreakerOpen
+        expr: signalbot_circuit_breakers_active > 0
+        for: 10m
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "{{ $value }} circuit breaker(s) open for 10 minutes: new orders are blocked"
+          action: "Open the control room: the Interlocks panel names each breaker and why."
+
+  - name: market-data
+    rules:
+      - alert: NoTradableSymbolReady
+        expr: sum(signalbot_trend_symbol_ready * signalbot_trend_symbol_tradable) == 0
+        for: 30m
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "No tradable symbol has enough 4h history: the strategy cannot trade"
+          action: "Usually the Binance warm-up failed (HTTP 451 = restricted region). Run the preflight: docker compose run --rm bot python -m signal_bot.ops.preflight"
+      - alert: SymbolStillWarmingUp
+        expr: (signalbot_trend_symbol_tradable == 1) and on(job, instance, symbol) (signalbot_trend_symbol_ready == 0)
+        for: 1h
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "{{ $labels.symbol }} is tradable but has not got enough 4h history after an hour"
+          action: "The REST warm-up for this symbol failed; restart the bot once Binance is reachable."
+      - alert: Stale4hCandles
+        expr: time() - max(signalbot_trend_last_bar_close_timestamp_seconds) > 4 * 3600 + 15 * 60
+        for: 5m
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "No completed 4h candle for any symbol for over 4h15m: the market-data feed is stale"
+          action: "Check the Market data interlock in the control room and the ingestor logs (subsystem=ingest)."
+      - alert: Stale4hCandlesForSymbol
+        expr: time() - signalbot_trend_last_bar_close_timestamp_seconds > 4 * 3600 + 15 * 60
+        for: 5m
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "{{ $labels.symbol }} has had no completed 4h candle for over 4h15m"
+          action: "One stream is stale while others update; a bot restart re-subscribes."
       - alert: MarketDataStale
         expr: max(signalbot_market_data_age_seconds{interval="1m"}) > 180
         for: 2m
-        labels: {severity: warning}
-        annotations: {summary: "No fresh 1m candles for 3 minutes"}
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "No fresh 1m candles for 3 minutes (sweep strategy)"
+
+  - name: protection
+    rules:
+      - alert: PositionUnprotected
+        expr: signalbot_positions_unprotected > 0
+        for: 1m
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "{{ $value }} open position(s) have no stop on the venue"
+          action: "The engine attaches a recovery stop or flattens; check the control room Stops panel and the kill switch."
+      - alert: ProtectiveOrderFailure
+        expr: increase(signalbot_protective_order_failures_total[10m]) > 0
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "An entry filled without a confirmed stop (kill switch engaged)"
+          action: "Follow the runbook: protective_order_failed. Resume only after checking the position."
+      - alert: TrailingStopNotMoved
+        expr: increase(signalbot_trailing_stop_updates_total{outcome=~"rejected|unknown"}[30m]) > 0
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "A trailing-stop amendment was refused or its outcome was unknown"
+          action: "The previous stop is still in place; the next 4h close retries. Compare Stop on exchange with Next stop in the control room."
+
+  - name: reconciliation
+    rules:
+      - alert: ReconciliationFailing
+        expr: time() - signalbot_reconciliation_last_success_timestamp_seconds > 900
+        for: 5m
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "No successful reconciliation with the venue for over 15 minutes"
+          action: "Check the logs (subsystem=tracking). Trading stays blocked while orders are unresolved."
+      - alert: ReconciliationDiscrepancies
+        expr: increase(signalbot_reconciliation_discrepancies_total[15m]) > 0
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "Local state disagreed with the venue ({{ $labels.kind }})"
+          action: "Usually self-healing; see Exchange discrepancies in the control room."
+
+  - name: risk
+    rules:
+      - alert: KillSwitchEngaged
+        expr: signalbot_kill_switch_active == 1
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "Kill switch engaged: all new orders refused"
+          action: "The control room shows the reason. Resuming needs the operator token and the typed confirmation."
+      - alert: RiskGovernorUnhealthy
+        expr: signalbot_risk_governor_healthy == 0
+        for: 1m
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "Risk governor cannot evaluate limits (failing closed)"
+      # Portfolio limits gate NEW entries only.  Winners' risk to a 3 ATR trailing stop
+      # grows past them (research: up to 6.9% against the 3% entry limit), so these
+      # alert on how far beyond the entry limit open exposure has drifted.
+      - alert: PortfolioOpenRiskHigh
+        expr: signalbot_portfolio_open_risk_ratio > on(job, instance) 1.5 * signalbot_portfolio_limit{limit="max_open_risk"}
+        for: 10m
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "Open risk to stops is {{ $value | humanizePercentage }} of equity, over 1.5x the entry limit"
+          action: "Expected as winners run (new entries are already refused); watch for a fast reversal."
+      - alert: PortfolioOpenRiskExtreme
+        expr: signalbot_portfolio_open_risk_ratio > on(job, instance) 2.5 * signalbot_portfolio_limit{limit="max_open_risk"}
+        for: 10m
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "Open risk to stops is {{ $value | humanizePercentage }} of equity, beyond anything seen in research"
+          action: "Review open positions in the control room; halt there if something is wrong."
+      - alert: PortfolioCorrelatedRiskHigh
+        expr: signalbot_portfolio_correlated_risk_ratio > on(job, instance) 1.5 * signalbot_portfolio_limit{limit="max_correlated_risk"}
+        for: 10m
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "Correlation-adjusted risk is {{ $value | humanizePercentage }} of equity, over 1.5x the entry limit"
+      - alert: PortfolioDrawdownRiskReduced
+        expr: signalbot_portfolio_drawdown_ratio >= on(job, instance) signalbot_portfolio_limit{limit="drawdown_reduce"}
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "Drawdown {{ $value | humanizePercentage }} from the equity peak: risk per trade is halved"
+      - alert: PortfolioDrawdownHalt
+        expr: signalbot_portfolio_drawdown_ratio >= on(job, instance) signalbot_portfolio_limit{limit="drawdown_halt"}
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "Drawdown {{ $value | humanizePercentage }} from the equity peak: new entries stopped"
+          action: "Review the trades before deciding whether the forward test continues."
+
+  - name: pipeline
+    rules:
+      - alert: UnknownSubmission
+        expr: increase(signalbot_order_submission_unknown_total[10m]) > 0
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "An order submission outcome was ambiguous (resolved by lookup)"
       - alert: EventBacklogGrowing
         expr: max(signalbot_event_queue_lag) > 500
         for: 2m
-        labels: {severity: warning}
-        annotations: {summary: "A consumer is falling behind the event bus"}
+        labels: {severity: warning, component: bot}
+        annotations:
+          summary: "A consumer is falling behind the event bus"
       - alert: JournalUnavailable
         expr: signalbot_journal_pending_events > 0
         for: 2m
+        labels: {severity: critical, component: bot}
+        annotations:
+          summary: "Durable events are buffered in memory (database unavailable)"
+          action: "docker compose ps postgres; disk space; docker compose logs postgres"
+
+  - name: host
+    rules:
+      - alert: HostDiskFilling
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.15
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Root disk has {{ $value | humanizePercentage }} free"
+          action: "docker system df; prune old images; check ./backups and the Prometheus/Loki volumes."
+      - alert: HostDiskCritical
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.05
+        for: 5m
         labels: {severity: critical}
-        annotations: {summary: "Durable events are buffered in memory (database unavailable)"}
-      - alert: ReconciliationDiscrepancies
-        expr: increase(signalbot_reconciliation_discrepancies_total[15m]) > 0
+        annotations:
+          summary: "Root disk has {{ $value | humanizePercentage }} free: PostgreSQL will stop accepting writes"
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 15m
         labels: {severity: warning}
-        annotations: {summary: "Local state disagreed with the exchange"}
-      - alert: ExchangeStreamDown
-        expr: min(signalbot_exchange_stream_connected) == 0
-        for: 1m
+        annotations:
+          summary: "Only {{ $value | humanizePercentage }} of memory available"
+      - alert: BackupStale
+        expr: time() - signalbot_backup_last_success_timestamp_seconds > 36 * 3600
+        for: 10m
         labels: {severity: warning}
-        annotations: {summary: "Private exchange stream disconnected; trading blocked"}
+        annotations:
+          summary: "No successful database backup for over 36 hours"
+          action: "docker compose logs backup"
+      - alert: BackupMissing
+        expr: absent(signalbot_backup_last_success_timestamp_seconds)
+        for: 2h
+        labels: {severity: warning}
+        annotations:
+          summary: "The backup service has never reported a successful backup"
+          action: "docker compose logs backup"
+
+  - name: meta
+    rules:
+      # Dead man's switch: always firing.  Alertmanager sends it to DEADMANS_SWITCH_URL;
+      # the external service alerts you when the pings stop (server or Alertmanager down).
+      - alert: Watchdog
+        expr: vector(1)
+        labels: {severity: none}
+        annotations:
+          summary: "Heartbeat: the alerting pipeline is alive"

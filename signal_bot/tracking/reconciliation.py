@@ -124,6 +124,7 @@ class Reconciler:
                 discrepancies = await self._reconcile(is_startup=not self._has_run_once.is_set())
             except Exception:
                 logger.exception("Reconciliation (%s) failed", reason)
+                metrics.RECONCILIATION_FAILURES.inc()
                 self.last_ok = False
                 return False
             finally:
@@ -131,6 +132,7 @@ class Reconciler:
             self.runs += 1
             self.last_ok = True
             self.last_run_at = self.clock.now()
+            metrics.RECONCILIATION_LAST_SUCCESS.set(time.time())
             self.last_discrepancies = discrepancies
             self._has_run_once.set()
             await self._publish(
@@ -225,6 +227,7 @@ class Reconciler:
 
         # 2. filled orders must have venue exposure (and protection)
         owned_symbols: set[str] = set()
+        unprotected = 0
         for order in await self.store.in_states([S.FILLED, S.PARTIALLY_FILLED]):
             owned_symbols.add(order.symbol)
             pos = pos_by_symbol.get(order.symbol)
@@ -235,6 +238,7 @@ class Reconciler:
                     await self.outcome_monitor.reconstruct_close(order)
                 continue
             if not pos.has_stop_loss and order.protective_status != "flattened":
+                unprotected += 1
                 metrics.RECONCILIATION_DISCREPANCIES.labels("missing_protective").inc()
                 found.append({"kind": "missing_protective", "order": order.client_order_id})
                 if self.engine is not None:
@@ -255,6 +259,7 @@ class Reconciler:
                     }
                 )
 
+        metrics.POSITIONS_UNPROTECTED.set(unprotected)
         for order in await self.store.in_states([S.RECONCILIATION_REQUIRED, S.SUBMISSION_UNKNOWN]):
             owned_symbols.add(order.symbol)
 

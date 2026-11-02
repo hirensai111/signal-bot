@@ -1,0 +1,161 @@
+# promtool test rules deploy/prometheus/alerts.test.yml  (run by CI in the prom/prometheus image)
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+tests:
+  - name: bot down for two minutes
+    interval: 1m
+    input_series:
+      - series: 'up{job="signal-bot", instance="bot:8080"}'
+        values: "1 1 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BotDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: BotDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: signal-bot, instance: "bot:8080"}
+            exp_annotations:
+              summary: "Signal bot is down or not answering (no metrics for 2 minutes)"
+              action: "docker compose ps; docker compose logs --tail=100 bot. It restarts automatically unless it is crash-looping."
+
+  - name: a restart is reported
+    interval: 1m
+    input_series:
+      - series: 'process_start_time_seconds{job="signal-bot", instance="bot:8080"}'
+        values: "1000 1000 1000 5000 5000"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BotRestarted
+        exp_alerts:
+          - exp_labels: {severity: warning, component: bot, job: signal-bot, instance: "bot:8080"}
+            exp_annotations:
+              summary: "Signal bot restarted in the last 15 minutes"
+              action: "Check the logs for a crash (Grafana > Logs, level=CRITICAL). Startup reconciliation re-derives orders and stops."
+
+  - name: live mode on the paper deployment is critical
+    interval: 1m
+    input_series:
+      - series: 'signalbot_build_info{job="signal-bot", instance="bot:8080", exec_mode="live", version="2.1.0", commit="x", strategy="trend_portfolio", strategy_version="0.1.0", venue="delta", delta_mode="testnet"}'
+        values: "1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: NotPaperTrading
+        exp_alerts:
+          - exp_labels: {severity: critical, component: bot, job: signal-bot, instance: "bot:8080", exec_mode: live, version: "2.1.0", commit: x, strategy: trend_portfolio, strategy_version: "0.1.0", venue: delta, delta_mode: testnet}
+            exp_annotations:
+              summary: "The paper deployment is running with exec_mode=live"
+              action: "Stop it now: docker compose stop bot. This deployment must only run EXEC_MODE=paper."
+
+  - name: warm-up failed for every tradable symbol (e.g. Binance HTTP 451)
+    interval: 5m
+    input_series:
+      - series: 'signalbot_trend_symbol_ready{job="signal-bot", instance="bot:8080", symbol="BTCUSDT"}'
+        values: "0x20"
+      - series: 'signalbot_trend_symbol_tradable{job="signal-bot", instance="bot:8080", symbol="BTCUSDT"}'
+        values: "1x20"
+      - series: 'signalbot_trend_symbol_ready{job="signal-bot", instance="bot:8080", symbol="BNBUSDT"}'
+        values: "0x20"
+      - series: 'signalbot_trend_symbol_tradable{job="signal-bot", instance="bot:8080", symbol="BNBUSDT"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: NoTradableSymbolReady
+        exp_alerts:
+          - exp_labels: {severity: critical, component: bot}
+            exp_annotations:
+              summary: "No tradable symbol has enough 4h history: the strategy cannot trade"
+              action: "Usually the Binance warm-up failed (HTTP 451 = restricted region). Run the preflight: docker compose run --rm bot python -m signal_bot.ops.preflight"
+      - eval_time: 65m
+        alertname: SymbolStillWarmingUp
+        exp_alerts:
+          - exp_labels: {severity: warning, component: bot, job: signal-bot, instance: "bot:8080", symbol: BTCUSDT}
+            exp_annotations:
+              summary: "BTCUSDT is tradable but has not got enough 4h history after an hour"
+              action: "The REST warm-up for this symbol failed; restart the bot once Binance is reachable."
+
+  - name: 4h feed goes stale
+    interval: 1m
+    input_series:
+      # scraped every minute; the newest bar closed at t=0 and nothing new arrives
+      - series: 'signalbot_trend_last_bar_close_timestamp_seconds{job="signal-bot", instance="bot:8080", symbol="BTCUSDT"}'
+        values: "0x330"
+    alert_rule_test:
+      - eval_time: 4h10m
+        alertname: Stale4hCandles
+        exp_alerts: []
+      - eval_time: 4h25m
+        alertname: Stale4hCandles
+        exp_alerts:
+          - exp_labels: {severity: critical, component: bot}
+            exp_annotations:
+              summary: "No completed 4h candle for any symbol for over 4h15m: the market-data feed is stale"
+              action: "Check the Market data interlock in the control room and the ingestor logs (subsystem=ingest)."
+
+  - name: open risk above the entry limit (entry limits do not cap open exposure)
+    interval: 1m
+    input_series:
+      - series: 'signalbot_portfolio_limit{job="signal-bot", instance="bot:8080", limit="max_open_risk"}'
+        values: "0.03x30"
+      - series: 'signalbot_portfolio_open_risk_ratio{job="signal-bot", instance="bot:8080"}'
+        values: "0.04x5 0.05x25"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PortfolioOpenRiskHigh
+        exp_alerts: []  # 4% is above the 3% entry limit but under 1.5x: no page
+      - eval_time: 20m
+        alertname: PortfolioOpenRiskHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, component: bot, job: signal-bot, instance: "bot:8080"}
+            exp_annotations:
+              summary: "Open risk to stops is 5% of equity, over 1.5x the entry limit"
+              action: "Expected as winners run (new entries are already refused); watch for a fast reversal."
+      - eval_time: 20m
+        alertname: PortfolioOpenRiskExtreme
+        exp_alerts: []
+
+  - name: drawdown halts entries
+    interval: 1m
+    input_series:
+      - series: 'signalbot_portfolio_limit{job="signal-bot", instance="bot:8080", limit="drawdown_reduce"}'
+        values: "0.10x5"
+      - series: 'signalbot_portfolio_limit{job="signal-bot", instance="bot:8080", limit="drawdown_halt"}'
+        values: "0.20x5"
+      - series: 'signalbot_portfolio_drawdown_ratio{job="signal-bot", instance="bot:8080"}'
+        values: "0.21x5"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PortfolioDrawdownHalt
+        exp_alerts:
+          - exp_labels: {severity: critical, component: bot, job: signal-bot, instance: "bot:8080"}
+            exp_annotations:
+              summary: "Drawdown 21% from the equity peak: new entries stopped"
+              action: "Review the trades before deciding whether the forward test continues."
+
+  - name: reconciliation stops succeeding
+    interval: 5m
+    input_series:
+      - series: 'signalbot_reconciliation_last_success_timestamp_seconds{job="signal-bot", instance="bot:8080"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ReconciliationFailing
+        exp_alerts:
+          - exp_labels: {severity: critical, component: bot, job: signal-bot, instance: "bot:8080"}
+            exp_annotations:
+              summary: "No successful reconciliation with the venue for over 15 minutes"
+              action: "Check the logs (subsystem=tracking). Trading stays blocked while orders are unresolved."
+
+  - name: unprotected position pages immediately
+    interval: 1m
+    input_series:
+      - series: 'signalbot_positions_unprotected{job="signal-bot", instance="bot:8080"}'
+        values: "0 1 1 1"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PositionUnprotected
+        exp_alerts:
+          - exp_labels: {severity: critical, component: bot, job: signal-bot, instance: "bot:8080"}
+            exp_annotations:
+              summary: "1 open position(s) have no stop on the venue"
+              action: "The engine attaches a recovery stop or flattens; check the control room Stops panel and the kill switch."

@@ -25,3 +25,6 @@ data/cache/
 data/
 /reports/
 replay-*/
+
+# deployment backups (deploy/backup/backup.sh)
+/backups/

@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     exec_mode: str = "paper"
     # Required in addition to exec_mode=live when delta_mode=production.
     live_trading_acknowledged: bool = False
+    # Deployment lock: a paper-only deployment refuses to start with EXEC_MODE=live.
+    paper_only: bool = False
     order_type: str = "limit_ioc"
     no_fill_timeout_seconds: float = 60.0
     max_candle_lag_seconds: float = 90.0
@@ -142,6 +144,10 @@ class Settings(BaseSettings):
         problems = []
         if self.exec_mode not in ("paper", "live"):
             problems.append(f"EXEC_MODE must be paper or live, got {self.exec_mode!r}")
+        if self.paper_only and self.exec_mode != "paper":
+            problems.append(
+                f"PAPER_ONLY=true: this deployment only runs EXEC_MODE=paper (got {self.exec_mode!r})"
+            )
         if self.exec_mode == "live":
             if not (self.delta_api_key and self.delta_api_secret):
                 problems.append("EXEC_MODE=live requires DELTA_API_KEY and DELTA_API_SECRET")

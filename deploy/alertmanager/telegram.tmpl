@@ -1,0 +1,8 @@
+{{ define "signalbot.telegram" -}}
+{{ if eq .Status "firing" }}🔴 <b>{{ .CommonLabels.alertname }}</b> ({{ .CommonLabels.severity }}){{ else }}✅ <b>Resolved: {{ .CommonLabels.alertname }}</b>{{ end }}
+{{ range .Alerts -}}
+• {{ .Annotations.summary }}{{ if .Labels.symbol }} [{{ .Labels.symbol }}]{{ end }}
+{{ if and (eq $.Status "firing") .Annotations.action }}  What to do: {{ .Annotations.action }}
+{{ end }}{{ end -}}
+Signal Bot paper deployment
+{{- end }}

@@ -28,16 +28,20 @@ pytest -q                                   # unit + failure scenarios + replay 
 python scripts/control_room_demo.py         # full stack on a synthetic market: http://127.0.0.1:8081
 ```
 
-Paper trading with Docker (PostgreSQL, Prometheus, Grafana):
+Paper trading with Docker (PostgreSQL, Prometheus, Alertmanager to Telegram, Grafana,
+Loki and Alloy, daily backups). It is locked to paper mode:
 
 ```bash
-cp .env.example .env    # set OPERATOR_TOKEN
-SIGNAL_BOT_COMMIT=$(git rev-parse HEAD) docker compose up --build
+cp deploy/paper.env.example .env    # fill in the passwords and OPERATOR_TOKEN
+SIGNAL_BOT_COMMIT=$(git rev-parse HEAD) docker compose up -d --build
 ```
 
-* Control room: <http://127.0.0.1:8080>
-* Grafana: <http://127.0.0.1:3000>
-* Prometheus: <http://127.0.0.1:9090>
+* Grafana: <http://127.0.0.1:3000>, home dashboard *Signal Bot: overview*
+* Control room: <http://127.0.0.1:8080>; halt/resume need `OPERATOR_TOKEN`
+* Prometheus: <http://127.0.0.1:9090>; Alertmanager: <http://127.0.0.1:9093>
+
+For an always-on server (Ubuntu, Tailscale, preflight, 14-day soak test), see
+[docs/deployment.md](docs/deployment.md).
 
 Without Docker: `EXEC_MODE=paper signal-bot` (needs `DATABASE_URL`).
 
@@ -62,7 +66,8 @@ checklist in [docs/runbook.md](docs/runbook.md) (the bot refuses to start withou
 | `signal_bot/observability` | Logs, metrics, status, ops server, control room |
 | `signal_bot/research` | Data, fill model, strategies, validation, reports |
 | `tests/scenarios` | End-to-end failure scenarios |
-| `deploy/` | Prometheus, alerts, Grafana |
+| `deploy/` | Server bootstrap, Prometheus alert rules (unit-tested), Alertmanager to Telegram, Loki/Alloy, Grafana dashboards, backups |
+| `signal_bot/ops` | Deployment preflight and soak-test report |
 
 ## Documentation
 

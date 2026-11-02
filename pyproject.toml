@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "signal-bot"
-version = "2.1.0"
+version = "2.2.0"
 description = "Fault-tolerant, event-driven crypto futures research, paper-trading and execution platform"
 requires-python = ">=3.11"
 dependencies = [
@@ -28,6 +28,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.4.0",
     "pip-audit>=2.7.0",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]

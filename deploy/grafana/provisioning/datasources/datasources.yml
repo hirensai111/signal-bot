@@ -1,0 +1,35 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 2000
+  # Read-only role created by the db-roles service (deploy/postgres/roles.sh).
+  - name: Signal Bot DB
+    uid: signalbot-db
+    type: grafana-postgresql-datasource
+    url: postgres:5432
+    user: grafana_ro
+    jsonData:
+      database: signal_bot
+      sslmode: disable
+      postgresVersion: 1600
+      maxOpenConns: 4
+    secureJsonData:
+      password: $GRAFANA_DB_PASSWORD
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    jsonData:
+      implementation: prometheus

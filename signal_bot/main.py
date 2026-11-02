@@ -150,11 +150,30 @@ async def seed_instruments() -> None:
         await session.commit()
 
 
+def resolve_strategy_config(configured: str) -> Path:
+    """The configured path, or the same path inside the installed package.
+
+    ``STRATEGY_CONFIG`` is written relative to the repository
+    (``signal_bot/research/strategies/...``).  In the Docker image the package lives in
+    site-packages and the working directory is elsewhere, so the path is also tried
+    relative to the installed package's parent directory (the TOMLs ship as package
+    data).  A missing config is a startup error: silently falling back to another
+    strategy would trade the wrong thing.
+    """
+    path = Path(configured)
+    if path.exists():
+        return path
+    installed = Path(__file__).resolve().parent.parent / configured
+    if not path.is_absolute() and installed.exists():
+        return installed
+    raise FileNotFoundError(
+        f"STRATEGY_CONFIG {configured!r} not found (also looked in {installed.parent})"
+    )
+
+
 def load_strategy_release() -> dict:
     """Identity of the strategy release, plus its full config document (``_doc``)."""
-    path = Path(settings.strategy_config)
-    if not path.exists():
-        return {"name": "liquidity_sweep", "version": "unversioned", "_doc": {}}
+    path = resolve_strategy_config(settings.strategy_config)
     with path.open("rb") as fh:
         doc = tomllib.load(fh)
     return {
@@ -285,8 +304,21 @@ async def main() -> None:
         raise SystemExit(2)
 
     live = settings.exec_mode == "live"
-    release = load_strategy_release()
+    try:
+        release = load_strategy_release()
+    except FileNotFoundError as exc:
+        logger.critical("Configuration error: %s", exc)
+        raise SystemExit(2) from exc
     doc = release.pop("_doc")
+    metrics.BUILD_INFO.labels(
+        package_version(),
+        code["commit"][:12],
+        str(release.get("name")),
+        str(release.get("version")),
+        settings.exec_mode,
+        "delta" if live else "paper",
+        settings.delta_mode,
+    ).set(1)
     strategy = release
     trend_mode = is_trend(release)
     symbols = list(doc.get("universe", {}).get("symbols") or settings.symbols)
@@ -453,6 +485,7 @@ async def main() -> None:
             governor.portfolio_monitor = portfolio_monitor
             # Before the ingestor starts, so live candles extend the warm-up history.
             await pipeline.warmup(binance_rest_klines)
+            pipeline.export_status()
             htf_scanner = micro_engine = detector = None
         else:
             htf_scanner = HtfLevelScanner(candle_queue=writer.subscribe("htf_levels", {"1h", "4h"}))

@@ -195,6 +195,10 @@ class LivePortfolio:
         state = PortfolioState(equity, peak, tuple(positions), corr)
         summary = exposure_summary(state, self.limits)
         self.last_summary = {**summary, "as_of": self.clock.now().isoformat()}
+        metrics.PORTFOLIO_EQUITY.set(equity)
+        metrics.PORTFOLIO_PEAK_EQUITY.set(peak)
+        metrics.PORTFOLIO_POSITIONS.set(summary["positions"])
+        metrics.PORTFOLIO_GROSS_LEVERAGE.set(summary["gross_leverage"])
         metrics.PORTFOLIO_OPEN_RISK.set(summary["open_risk_pct"] / 100)
         metrics.PORTFOLIO_CORRELATED_RISK.set(summary["correlated_risk_pct"] / 100)
         metrics.PORTFOLIO_DRAWDOWN.set(summary["drawdown_pct"] / 100)
@@ -237,6 +241,16 @@ class TrendPipeline:
         self.batch_timeout = batch_timeout
         self.max_candle_lag = max_candle_lag
         self.step = self.history.step
+        for name in (
+            "max_open_risk",
+            "max_correlated_risk",
+            "max_gross_leverage",
+            "max_positions",
+            "drawdown_reduce",
+            "drawdown_halt",
+            "risk_per_trade",
+        ):
+            metrics.PORTFOLIO_LIMIT.labels(name).set(getattr(self.limits, name))
         self._batches: dict[datetime, dict[str, TrendDecision | None]] = {}
         self._shutdown = asyncio.Event()
         self.last_batch: dict[str, Any] | None = None
@@ -253,6 +267,7 @@ class TrendPipeline:
                 logger.error("Trend warm-up for %s failed: %s", symbol, exc)
                 continue
             n = self.history.seed(klines)
+            self._export(symbol)
             logger.info(
                 "Trend warm-up %s: %d completed %s bars (ready=%s)",
                 symbol,
@@ -263,6 +278,18 @@ class TrendPipeline:
 
     def shutdown(self) -> None:
         self._shutdown.set()
+
+    def _export(self, symbol: str) -> None:
+        metrics.TREND_SYMBOL_READY.labels(symbol).set(1 if self.generator.ready(symbol) else 0)
+        metrics.TREND_SYMBOL_TRADABLE.labels(symbol).set(1 if symbol in self.tradable else 0)
+        metrics.TREND_HISTORY_BARS.labels(symbol).set(self.history.bars(symbol))
+        last = self.history.last_open(symbol)
+        if last is not None:
+            metrics.TREND_LAST_BAR_CLOSE.labels(symbol).set((last + self.step).timestamp())
+
+    def export_status(self) -> None:
+        for symbol in self.universe:
+            self._export(symbol)
 
     async def run(self) -> None:
         logger.info("Trend pipeline started (universe=%s)", self.universe)
@@ -284,8 +311,10 @@ class TrendPipeline:
             return
         outcome, decision = self.generator.on_candle(candle)
         self.counts[outcome] = self.counts.get(outcome, 0) + 1
+        metrics.TREND_CANDLES.labels(candle.symbol, outcome).inc()
         if outcome != "appended":
             return
+        self._export(candle.symbol)
         if self.trailing is not None:
             try:
                 await self.trailing.on_bar_close(candle)
@@ -315,6 +344,7 @@ class TrendPipeline:
         batch = self._batches.pop(close, {})
         decisions = {s: d for s, d in batch.items() if d is not None}
         admissions = await self.decide(close, decisions) if decisions else []
+        metrics.TREND_BATCHES.inc()
         self.last_batch = {
             "bar_close": close.isoformat(),
             "symbols_reported": sorted(batch),
@@ -418,7 +448,7 @@ class TrendPipeline:
         async with self.session_factory() as session:
             session.add(sig)
             await session.commit()
-        with bind(correlation_id=str(sig.id), signal_id=str(sig.id)):
+        with bind(correlation_id=str(sig.id), signal_id=str(sig.id), symbol=sig.symbol):
             payload = {
                 "signal_id": str(sig.id),
                 "symbol": sig.symbol,
