@@ -5,18 +5,29 @@
 Rows: Overview, Trading performance, Risk & operations, Logs.  Every metric it uses
 is checked against the bot's registry by tests/test_deploy.py, so a renamed metric
 fails CI instead of silently blanking a panel.
+
+Two paper bots can run side by side (docs/deployment.md, "Second paper bot").  The "Bot"
+selector at the top switches every Prometheus and log panel between them; the "Trade
+database" selector does the same for the PostgreSQL panels (each bot has its own database).
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 OUT = Path(__file__).parent / "dashboards" / "signal-bot-overview.json"
 PROM = {"type": "prometheus", "uid": "prometheus"}
 LOKI = {"type": "loki", "uid": "loki"}
-DB = {"type": "grafana-postgresql-datasource", "uid": "signalbot-db"}
-BOT = 'job="signal-bot"'
+DB = {"type": "grafana-postgresql-datasource", "uid": "${tradedb}"}
+# Every bot metric is filtered to the bot picked in the "Bot" selector.
+INSTANCE = 'instance="${bot}:8080"'
+BOT = f'job="signal-bot", {INSTANCE}'
+# Metrics that are not the bot's own (the backup service writes these via node-exporter).
+_NOT_BOT = ("signalbot_backup_",)
+_BOT_METRIC = re.compile(r"\b((?:signalbot|process)_[a-z0-9_]+)(\{)?")
+_LABELS = re.compile(r'((?:[^{}"]|"[^"]*")*)\}')
 
 _id = 0
 _y = 0
@@ -28,10 +39,27 @@ def _next_id() -> int:
     return _id
 
 
+def for_bot(expr: str) -> str:
+    """Add the selected bot's instance to every bot metric in *expr* that lacks it."""
+
+    def add(m: re.Match) -> str:
+        name, brace = m.group(1), m.group(2)
+        if name.startswith(_NOT_BOT):
+            return m.group(0)
+        if brace:
+            labels = _LABELS.match(expr, m.end())  # quoted values may contain "}"
+            if labels and re.search(r"\binstance\s*=", labels.group(1)):
+                return m.group(0)
+            return f"{name}{{{INSTANCE}, "
+        return f"{name}{{{INSTANCE}}}"
+
+    return _BOT_METRIC.sub(add, expr)
+
+
 def prom(expr: str, legend: str = "", instant: bool = False, ref: str = "A") -> dict:
     return {
         "datasource": PROM,
-        "expr": expr,
+        "expr": for_bot(expr),
         "legendFormat": legend,
         "refId": ref,
         "instant": instant,
@@ -777,7 +805,7 @@ FROM signals WHERE strategy = 'trend_breakout' ORDER BY created_at DESC LIMIT 30
     # ------------------------------------------------------------------ logs
     panels.append(row("Logs", y))
     y += 1
-    selector = '{service="bot", level=~"$level", subsystem=~"$subsystem"}'
+    selector = '{service="$bot", level=~"$level", subsystem=~"$subsystem"}'
     filters = ' |~ "(?i)$search" | symbol=~"(?i).*$symbol.*" | order_id=~".*$order.*"'
     # Readable lines (level, logger, message, symbol); the raw JSON stays in the details.
     pretty = (
@@ -786,7 +814,7 @@ FROM signals WHERE strategy = 'trend_breakout' ORDER BY created_at DESC LIMIT 30
         "{{ if .msg }}{{ .msg }}{{ else }}{{ __line__ }}{{ end }}"
         "{{ if .symbol }}  [{{ .symbol }}]{{ end }}{{ if .exc }}\n{{ .exc }}{{ end }}`"
     )
-    volume = loki('sum by (level) (count_over_time({service="bot"} [$__auto]))')
+    volume = loki('sum by (level) (count_over_time({service="$bot"} [$__auto]))')
     volume["legendFormat"] = "{{level}}"
     panels += [
         panel(
@@ -865,6 +893,25 @@ FROM signals WHERE strategy = 'trend_breakout' ORDER BY created_at DESC LIMIT 30
         "templating": {
             "list": [
                 {
+                    "name": "bot",
+                    "label": "Bot",
+                    "type": "custom",
+                    "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp",
+                    "current": {"text": "Main (trailing stop)", "value": "bot"},
+                    "options": [
+                        {"text": "Main (trailing stop)", "value": "bot", "selected": True},
+                        {"text": "TP 1.5R (fixed exit)", "value": "bot-tp", "selected": False},
+                    ],
+                },
+                {
+                    "name": "tradedb",
+                    "label": "Trade database",
+                    "type": "datasource",
+                    "query": "grafana-postgresql-datasource",
+                    "regex": "/^Signal Bot DB/",
+                    "current": {"text": "Signal Bot DB", "value": "signalbot-db"},
+                },
+                {
                     "name": "control_room",
                     "label": "Control room URL",
                     "type": "textbox",
@@ -892,7 +939,7 @@ FROM signals WHERE strategy = 'trend_breakout' ORDER BY created_at DESC LIMIT 30
                     "datasource": LOKI,
                     "query": {
                         "label": "subsystem",
-                        "stream": '{service="bot"}',
+                        "stream": '{service="$bot"}',
                         "type": 1,
                         "refId": "LokiVariableQueryEditor-VariableQuery",
                     },

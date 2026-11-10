@@ -58,12 +58,65 @@ def test_dashboards_are_valid_and_use_provisioned_datasources():
         assert dash["uid"] and dash["title"]
         ids = [p["id"] for p in dash["panels"]]
         assert len(ids) == len(set(ids)), f"duplicate panel ids in {path.name}"
+        # A datasource picked by a selector (e.g. "${tradedb}") must offer only
+        # provisioned datasources of its type.
+        ds_vars = {}
+        for var in dash.get("templating", {}).get("list", []):
+            if var.get("type") == "datasource":
+                pattern = re.compile(var["regex"].strip("/"))
+                choices = {
+                    d["uid"]
+                    for d in provisioned["datasources"]
+                    if d["type"] == var["query"] and pattern.search(d["name"])
+                }
+                assert choices, f"{path.name}: selector ${var['name']} matches no datasource"
+                ds_vars["${" + var["name"] + "}"] = choices
         for panel in dash["panels"]:
             for target in panel.get("targets", []):
                 uid = (target.get("datasource") or panel.get("datasource") or {}).get("uid")
-                assert uid in uids, (
+                assert uid in uids or uid in ds_vars, (
                     f"{path.name}: panel {panel['title']!r} uses unknown datasource {uid}"
                 )
+
+
+def test_dashboards_filter_every_bot_metric_to_the_selected_bot():
+    """Two paper bots run side by side: no panel may add up both bots' numbers."""
+    for path in DASHBOARDS:
+        dash = json.loads(path.read_text())
+        assert any(v["name"] == "bot" for v in dash["templating"]["list"]), path.name
+        for panel in dash["panels"]:
+            for target in panel.get("targets", []):
+                expr = target.get("expr", "")
+                for m in re.finditer(
+                    r"\b((?:signalbot|process)_[a-z0-9_]+)(\{[^}]*\}[^{]*)?", expr
+                ):
+                    if m.group(1).startswith("signalbot_backup_") or "service=" in expr:
+                        continue
+                    assert re.match(
+                        r"\b(?:signalbot|process)_[a-z0-9_]+\{[^{]*instance=\"\$\{bot\}:8080\"",
+                        expr[m.start() :],
+                    ), f"{path.name}: {panel['title']!r} reads {m.group(1)} for every bot"
+
+
+def test_second_paper_bot_is_optional_paper_only_and_separate():
+    compose = yaml.safe_load(COMPOSE.read_text())
+    services = compose["services"]
+    tp, main = services["bot-tp"], services["bot"]
+    env = tp["environment"]
+    assert tp["profiles"] == ["tp"]  # never started by a plain `docker compose up`
+    assert env["EXEC_MODE"] == "paper" and env["PAPER_ONLY"] == "true"
+    assert env["STRATEGY_CONFIG"].endswith("trend_portfolio_tp15.toml")
+    assert env["DATABASE_URL"].endswith("/signal_bot_tp")
+    assert main["environment"]["DATABASE_URL"].endswith("/signal_bot")
+    assert env["TELEGRAM_COMMANDS"] == "false" and env["BOT_LABEL"]
+    assert tp["volumes"] != main["volumes"] and "botdata-tp" in compose["volumes"]
+    assert tp["ports"] == ["127.0.0.1:8081:8080"]
+    assert tp["image"] == main["image"]
+    roles = (ROOT / "deploy/postgres/roles.sh").read_text()
+    assert "CREATE DATABASE signal_bot_tp" in roles
+    assert "signal_bot_tp" in (ROOT / "deploy/backup/backup.sh").read_text()
+    prom = (ROOT / "deploy/prometheus/prometheus.yml").read_text()
+    assert '"bot-tp"' in prom and "bot-tp:8080" in prom
 
 
 def test_overview_dashboard_is_generated_from_its_source():
@@ -86,8 +139,8 @@ def test_open_risk_panels_show_the_entry_limit_next_to_actual_exposure():
     dash = json.loads((ROOT / "deploy/grafana/dashboards/signal-bot-overview.json").read_text())
     panel = next(p for p in dash["panels"] if p["title"].startswith("Open risk to stops"))
     exprs = [t["expr"] for t in panel["targets"]]
-    assert "signalbot_portfolio_open_risk_ratio" in exprs
-    assert 'signalbot_portfolio_limit{limit="max_open_risk"}' in exprs
+    assert 'signalbot_portfolio_open_risk_ratio{instance="${bot}:8080"}' in exprs
+    assert 'signalbot_portfolio_limit{instance="${bot}:8080", limit="max_open_risk"}' in exprs
     assert "new entries only" in panel["description"]
 
 

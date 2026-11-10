@@ -37,7 +37,7 @@ loki.source.docker "containers" {
 
 loki.process "signalbot" {
   stage.match {
-    selector = "{service=\"bot\"}"
+    selector = "{service=~\"bot|bot-tp\"}"
 
     stage.json {
       expressions = {

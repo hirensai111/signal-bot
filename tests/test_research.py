@@ -10,7 +10,7 @@ from signal_bot.research.data import data_quality, resample, synthetic
 from signal_bot.research.experiment import deterministic_view, load_config, run_experiment
 from signal_bot.research.fill_model import CostModel, Intent, Sizing, simulate
 from signal_bot.research.report import render_html
-from signal_bot.research.strategies import ExhaustionReversion, RegimeFilter, build
+from signal_bot.research.strategies import ExhaustionReversion, RegimeFilter, build, frame_for
 
 CONFIG = "signal_bot/research/strategies/exhaustion_reversion.toml"
 
@@ -175,6 +175,50 @@ def test_trend_breakout_is_causal_and_uses_trailing_stops():
     assert [(i.bar, i.side) for i in early if i.bar < cut] == [
         (i.bar, i.side) for i in full if i.bar < cut
     ]
+
+
+def test_trend_breakout_fixed_target_and_no_trail():
+    """trend_breakout_tp15: same entries, a +1.5R target, no trailing stop."""
+    from signal_bot.research.strategies import TrendBreakout
+
+    ds = synthetic(interval="1h", bars=8000, seed=21)
+    base = TrendBreakout(timeframe="4h", entry_lookback=20).generate(ds)
+    tp = TrendBreakout(timeframe="4h", entry_lookback=20, trail_atr=0.0, take_profit_r=1.5)
+    fixed = tp.generate(ds)
+    assert [(i.bar, i.side, i.entry, i.stop) for i in fixed] == [
+        (i.bar, i.side, i.entry, i.stop) for i in base
+    ]
+    for i in fixed:
+        assert not i.trail_distance
+        risk = abs(i.entry - i.stop)
+        sign = 1 if i.side == "long" else -1
+        assert i.take_profit == pytest.approx(i.entry + sign * 1.5 * risk)
+    f = frame_for(ds, "4h")
+    trades, _ = simulate(f, fixed, NO_COST, Sizing(10_000, 0.01, 100))
+    reasons = {t.exit_reason for t in trades if t.filled}
+    assert reasons <= {"sl", "tp", "time"} and "tp" in reasons
+    for t in trades:
+        if t.exit_reason == "tp":
+            assert t.signal_r == pytest.approx(1.5)
+
+
+def test_tp15_configs_describe_the_same_entries_with_the_fixed_exit():
+    import tomllib
+
+    def load(name):
+        with open(f"signal_bot/research/strategies/{name}.toml", "rb") as fh:
+            return tomllib.load(fh)
+
+    main, tp = load("trend_breakout"), load("trend_breakout_tp15")
+    exit_keys = {"trail_atr", "take_profit_r"}
+    assert {k: v for k, v in main["params"].items() if k not in exit_keys} == {
+        k: v for k, v in tp["params"].items() if k not in exit_keys
+    }
+    assert tp["params"]["trail_atr"] == 0.0 and tp["params"]["take_profit_r"] == 1.5
+    assert main["params"].get("take_profit_r", 0.0) == 0.0  # the main bot is unchanged
+    pmain, ptp = load("trend_portfolio"), load("trend_portfolio_tp15")
+    assert pmain["portfolio"] == ptp["portfolio"] and pmain["universe"] == ptp["universe"]
+    assert pmain["costs"] == ptp["costs"]
 
 
 def test_sweep_v2_filters_tight_stops_and_resets_targets(monkeypatch):

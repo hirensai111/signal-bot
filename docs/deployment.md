@@ -110,6 +110,52 @@ It builds the image, runs the preflight, restarts the bot and appends to
 `deploy-history.log`. Data, `.env` and backups are kept. On restart, reconciliation
 and the trailing-stop re-derivation restore open positions' stops.
 
+## Second paper bot (fixed +1.5R exit)
+
+An optional second bot forward-tests one exit variant next to the main bot, on the same
+live prices from the same day:
+
+| | Main bot (`bot`) | Second bot (`bot-tp`) |
+|---|---|---|
+| Strategy | `trend_portfolio.toml`: 2 ATR stop, 3 ATR trailing stop, no target | `trend_portfolio_tp15.toml`: the **same entries**, 2 ATR fixed stop, **take profit at +1.5R**, no trailing |
+| Portfolio rules | 0.5% risk per trade, 6 positions, 3% / 2% risk limits, drawdown brakes | identical |
+| Paper account | $10,000 | its own $10,000 |
+| Database / state | `signal_bot`, volume `botdata` | `signal_bot_tp` (created by `db-roles`), volume `botdata-tp` |
+| Control room | `127.0.0.1:8080` | `127.0.0.1:8081` |
+| Telegram | answers `/status` | same chat, every message tagged `[TP 1.5R]`, send-only |
+
+Why this variant: see docs/research.md, *Exit variants*. It was chosen after the holdout
+year had been seen, so only this forward test can judge it.
+
+**Turn it on** (once, on the server):
+
+```bash
+cd /opt/signal-bot && echo 'COMPOSE_PROFILES=tp' | sudo tee -a .env
+sudo docker compose up -d
+sudo tailscale serve --bg --https=8444 http://127.0.0.1:8081
+```
+
+With `COMPOSE_PROFILES=tp` in `.env`, every `docker compose` command, including
+`deploy/update.sh`, includes the second bot, so both always run the same code. (The
+update script warns if a second bot exists without that setting.) It adds about 250 MB
+of memory.
+
+**Watching both:**
+
+- Control rooms: `https://<server>.<tailnet>.ts.net:8443` (main) and `:8444` (second).
+- Grafana: the **Bot** selector at the top switches every metric and log panel; set
+  **Trade database** to the matching database for the trade-performance panels.
+- Alerts are per bot. Telegram alerts about the second bot start with `[TP 1.5R bot]`.
+  Prometheus finds the second bot by its container name, so while it is stopped it has
+  no target and raises no "bot down" alert. Docker restarts it if it crashes.
+- Backups include `signal_bot_tp-<stamp>.dump` and `paper_state_tp-<stamp>.json`;
+  `deploy/restore.sh` restores either bot from its own dump.
+- Soak report for the second bot:
+  `sudo docker compose exec bot-tp python -m signal_bot.ops.soak --prometheus http://prometheus:9090 --instance bot-tp:8080`
+
+**Turn it off:** remove `COMPOSE_PROFILES=tp` from `.env` and run
+`sudo docker compose --profile tp stop bot-tp`. Its database and volume are kept.
+
 ## Access and permissions
 
 - **Nothing public.** Every port is bound to `127.0.0.1`. `tailscale serve` makes
@@ -205,6 +251,9 @@ bot's other alerts are muted, because they are consequences of it.
   ```bash
   cd /opt/signal-bot && sudo deploy/restore.sh backups/signal_bot-<stamp>.dump backups/paper_state-<stamp>.json
   ```
+
+  For the second paper bot, pass its own files (`signal_bot_tp-<stamp>.dump`,
+  `paper_state_tp-<stamp>.json`); the script restores that bot's database instead.
 
   It stops the bot, restores the database (replacing it), restores the paper state
   and starts the bot. Practise it once during the soak: restore into a scratch

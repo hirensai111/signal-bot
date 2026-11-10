@@ -26,6 +26,19 @@ datasources:
       maxOpenConns: 4
     secureJsonData:
       password: $GRAFANA_DB_PASSWORD
+  # The second paper bot's database (compose profile "tp"); empty until that bot runs.
+  - name: Signal Bot DB (TP 1.5R)
+    uid: signalbot-db-tp
+    type: grafana-postgresql-datasource
+    url: postgres:5432
+    user: grafana_ro
+    jsonData:
+      database: signal_bot_tp
+      sslmode: disable
+      postgresVersion: 1600
+      maxOpenConns: 4
+    secureJsonData:
+      password: $GRAFANA_DB_PASSWORD
   - name: Alertmanager
     uid: alertmanager
     type: alertmanager

@@ -313,3 +313,35 @@ What it shows:
   * The independent-backtest comparison ignored listing dates.
 
 Forward paper trading is now the only clean test left. The trend portfolio is the default `STRATEGY_CONFIG` for exactly that; nothing here supports live trading.
+
+### Exit variants (November 2026, after the holdout)
+
+A question from forward testing: the trailing stop gives back 1.5R from the best price,
+so would a fixed profit target do better? Four exits were compared on the same frozen
+entries and portfolio rules. **The holdout year had already been seen**, so this is a
+fourth look at it and none of these figures is out-of-sample.
+
+| Exit | 2021-01..2025-09 (all coins) | Development, Delta listing dates | Holdout 2025-10..2026-09 |
+|---|---|---|---|
+| A. 3 ATR trailing stop, no target (0.2.0) | +4.3%/yr, max DD -18.7%, 1170 trades, 37% wins | +13.4%/yr, -10.3% | +3.4%, -16.4% |
+| B. Target +1.5R, trailing until then | +7.9%/yr, -14.5%, 1489 trades, 38% | +16.2%/yr, -9.0% | +6.1%, -16.9% |
+| **C. Target +1.5R, fixed 2 ATR stop, no trailing** | **+9.1%/yr, -15.8%, 1390 trades, 45%** | **+18.6%/yr, -9.8%** | **+4.5%, -17.4%** |
+| D. Target +3R, trailing until then | +1.3%/yr, -17.6%, 1313 trades, 36% | +9.0%/yr, -9.3% | +5.5%, -16.7% |
+
+What it shows:
+
+* **A +1.5R target beat the trailing-only exit in every period** (B and C), with similar
+  or smaller drawdowns. Per trade, B averages less than A (+0.069R vs +0.084R); the gain
+  comes from trades closing sooner (1.5-2.0 days vs 2.2), which frees position slots for
+  breakouts the portfolio rules otherwise refuse, and from banking moves that reach
+  +1.5R and then reverse.
+* **B and C swap places** across periods; neither is clearly better. C is simpler (no
+  stop amendments) and won on the two development views.
+* **+3R is the worst of both:** rarely reached, and it still cuts the big trends.
+
+Because these numbers come from data already seen, variant C is not promoted. It runs as
+a **second paper bot** next to the unchanged 0.2.0 exit
+(`strategies/trend_portfolio_tp15.toml`, `take_profit_r = 1.5`, `trail_atr = 0`;
+docs/deployment.md, *Second paper bot*), so the forward test compares them on the same
+prices from the same day. The research code reproduces C exactly from that config
+(1390 trades, +9.1%/yr; 312 trades, +4.5% in the holdout).

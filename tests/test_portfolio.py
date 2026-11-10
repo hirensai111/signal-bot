@@ -168,8 +168,9 @@ def test_return_correlations_are_causal_and_need_enough_overlap():
     assert short == {}  # too little overlap: treated as 1 by the rules
 
 
-def test_portfolio_config_runs_the_frozen_pre_registered_signal():
-    with open("signal_bot/research/strategies/trend_portfolio.toml", "rb") as fh:
+@pytest.mark.parametrize("name", ["trend_portfolio", "trend_portfolio_tp15"])
+def test_portfolio_config_runs_the_frozen_pre_registered_signal(name):
+    with open(f"signal_bot/research/strategies/{name}.toml", "rb") as fh:
         portfolio = tomllib.load(fh)
     with open(portfolio["signal_config"], "rb") as fh:
         signal = tomllib.load(fh)

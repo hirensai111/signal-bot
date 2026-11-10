@@ -395,6 +395,7 @@ async def main() -> None:
             signal_queue,
             config=ExecutionConfig(
                 order_type=settings.order_type,
+                entry_limit_slippage_bps=Decimal(str(settings.entry_limit_slippage_bps)),
                 no_fill_timeout=settings.no_fill_timeout_seconds,
                 max_book_age_seconds=settings.max_book_age_seconds,
                 require_stream_on_start=live,

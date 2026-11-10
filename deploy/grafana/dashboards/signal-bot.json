@@ -28,7 +28,7 @@
    },
    "targets": [
     {
-     "expr": "signalbot_kill_switch_active",
+     "expr": "signalbot_kill_switch_active{instance=\"${bot}:8080\"}",
      "refId": "A"
     }
    ],
@@ -90,7 +90,7 @@
    },
    "targets": [
     {
-     "expr": "signalbot_circuit_breakers_active",
+     "expr": "signalbot_circuit_breakers_active{instance=\"${bot}:8080\"}",
      "refId": "A"
     }
    ],
@@ -140,7 +140,7 @@
    },
    "targets": [
     {
-     "expr": "signalbot_risk_governor_healthy",
+     "expr": "signalbot_risk_governor_healthy{instance=\"${bot}:8080\"}",
      "refId": "A"
     }
    ],
@@ -202,7 +202,7 @@
    },
    "targets": [
     {
-     "expr": "signalbot_paper_equity",
+     "expr": "signalbot_paper_equity{instance=\"${bot}:8080\"}",
      "refId": "A"
     }
    ],
@@ -248,7 +248,7 @@
    },
    "targets": [
     {
-     "expr": "signalbot_open_positions",
+     "expr": "signalbot_open_positions{instance=\"${bot}:8080\"}",
      "refId": "A"
     }
    ],
@@ -294,7 +294,7 @@
    },
    "targets": [
     {
-     "expr": "sum(signalbot_event_queue_lag)",
+     "expr": "sum(signalbot_event_queue_lag{instance=\"${bot}:8080\"})",
      "refId": "A"
     }
    ],
@@ -348,7 +348,7 @@
    },
    "targets": [
     {
-     "expr": "signalbot_market_data_age_seconds",
+     "expr": "signalbot_market_data_age_seconds{instance=\"${bot}:8080\"}",
      "legendFormat": "{{symbol}} {{interval}}",
      "refId": "A"
     }
@@ -389,7 +389,7 @@
    },
    "targets": [
     {
-     "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(signalbot_exchange_request_latency_seconds_bucket[5m])))",
+     "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(signalbot_exchange_request_latency_seconds_bucket{instance=\"${bot}:8080\"}[5m])))",
      "legendFormat": "{{operation}}",
      "refId": "A"
     }
@@ -430,7 +430,7 @@
    },
    "targets": [
     {
-     "expr": "signalbot_event_queue_lag",
+     "expr": "signalbot_event_queue_lag{instance=\"${bot}:8080\"}",
      "legendFormat": "{{subscriber}}",
      "refId": "A"
     }
@@ -471,7 +471,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (rule) (increase(signalbot_risk_denials_total[5m]))",
+     "expr": "sum by (rule) (increase(signalbot_risk_denials_total{instance=\"${bot}:8080\"}[5m]))",
      "legendFormat": "{{rule}}",
      "refId": "A"
     }
@@ -512,17 +512,17 @@
    },
    "targets": [
     {
-     "expr": "sum(increase(signalbot_orders_rejected_total[5m]))",
+     "expr": "sum(increase(signalbot_orders_rejected_total{instance=\"${bot}:8080\"}[5m]))",
      "legendFormat": "rejected",
      "refId": "A"
     },
     {
-     "expr": "sum(increase(signalbot_order_submission_unknown_total[5m]))",
+     "expr": "sum(increase(signalbot_order_submission_unknown_total{instance=\"${bot}:8080\"}[5m]))",
      "legendFormat": "submission unknown",
      "refId": "B"
     },
     {
-     "expr": "sum(increase(signalbot_protective_order_failures_total[5m]))",
+     "expr": "sum(increase(signalbot_protective_order_failures_total{instance=\"${bot}:8080\"}[5m]))",
      "legendFormat": "protective failure",
      "refId": "C"
     }
@@ -563,7 +563,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (to_state) (increase(signalbot_order_transitions_total[5m]))",
+     "expr": "sum by (to_state) (increase(signalbot_order_transitions_total{instance=\"${bot}:8080\"}[5m]))",
      "legendFormat": "{{to_state}}",
      "refId": "A"
     }
@@ -604,7 +604,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (kind) (increase(signalbot_reconciliation_discrepancies_total[15m]))",
+     "expr": "sum by (kind) (increase(signalbot_reconciliation_discrepancies_total{instance=\"${bot}:8080\"}[15m]))",
      "legendFormat": "{{kind}}",
      "refId": "A"
     }
@@ -645,17 +645,17 @@
    },
    "targets": [
     {
-     "expr": "sum by (consumer) (increase(signalbot_event_processing_failures_total[5m]))",
+     "expr": "sum by (consumer) (increase(signalbot_event_processing_failures_total{instance=\"${bot}:8080\"}[5m]))",
      "legendFormat": "failures {{consumer}}",
      "refId": "A"
     },
     {
-     "expr": "signalbot_journal_pending_events",
+     "expr": "signalbot_journal_pending_events{instance=\"${bot}:8080\"}",
      "legendFormat": "journal buffered",
      "refId": "B"
     },
     {
-     "expr": "sum(increase(signalbot_events_duplicate_total[5m]))",
+     "expr": "sum(increase(signalbot_events_duplicate_total{instance=\"${bot}:8080\"}[5m]))",
      "legendFormat": "duplicates suppressed",
      "refId": "C"
     }
@@ -696,7 +696,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (reason) (increase(signalbot_candles_dropped_total[5m]))",
+     "expr": "sum by (reason) (increase(signalbot_candles_dropped_total{instance=\"${bot}:8080\"}[5m]))",
      "legendFormat": "{{reason}}",
      "refId": "A"
     }
@@ -737,7 +737,7 @@
    },
    "targets": [
     {
-     "expr": "histogram_quantile(0.95, sum by (le) (rate(signalbot_reconciliation_duration_seconds_bucket[30m])))",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(signalbot_reconciliation_duration_seconds_bucket{instance=\"${bot}:8080\"}[30m])))",
      "legendFormat": "p95",
      "refId": "A"
     }
@@ -768,6 +768,29 @@
   "list": []
  },
  "templating": {
-  "list": []
+  "list": [
+   {
+    "name": "bot",
+    "label": "Bot",
+    "type": "custom",
+    "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp",
+    "current": {
+     "text": "Main (trailing stop)",
+     "value": "bot"
+    },
+    "options": [
+     {
+      "text": "Main (trailing stop)",
+      "value": "bot",
+      "selected": true
+     },
+     {
+      "text": "TP 1.5R (fixed exit)",
+      "value": "bot-tp",
+      "selected": false
+     }
+    ]
+   }
+  ]
  }
 }

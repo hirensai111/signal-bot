@@ -35,6 +35,39 @@
  "templating": {
   "list": [
    {
+    "name": "bot",
+    "label": "Bot",
+    "type": "custom",
+    "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp",
+    "current": {
+     "text": "Main (trailing stop)",
+     "value": "bot"
+    },
+    "options": [
+     {
+      "text": "Main (trailing stop)",
+      "value": "bot",
+      "selected": true
+     },
+     {
+      "text": "TP 1.5R (fixed exit)",
+      "value": "bot-tp",
+      "selected": false
+     }
+    ]
+   },
+   {
+    "name": "tradedb",
+    "label": "Trade database",
+    "type": "datasource",
+    "query": "grafana-postgresql-datasource",
+    "regex": "/^Signal Bot DB/",
+    "current": {
+     "text": "Signal Bot DB",
+     "value": "signalbot-db"
+    }
+   },
+   {
     "name": "control_room",
     "label": "Control room URL",
     "type": "textbox",
@@ -72,7 +105,7 @@
     },
     "query": {
      "label": "subsystem",
-     "stream": "{service=\"bot\"}",
+     "stream": "{service=\"$bot\"}",
      "type": 1,
      "refId": "LokiVariableQueryEditor-VariableQuery"
     },
@@ -131,7 +164,7 @@
     },
     "enable": true,
     "iconColor": "orange",
-    "expr": "changes(process_start_time_seconds{job=\"signal-bot\"}[2m]) > 0",
+    "expr": "changes(process_start_time_seconds{job=\"signal-bot\", instance=\"${bot}:8080\"}[2m]) > 0",
     "step": "60s",
     "titleFormat": "Bot restarted"
    }
@@ -172,7 +205,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "up{job=\"signal-bot\"}",
+     "expr": "up{job=\"signal-bot\", instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -247,7 +280,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "time() - process_start_time_seconds{job=\"signal-bot\"}",
+     "expr": "time() - process_start_time_seconds{job=\"signal-bot\", instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -308,7 +341,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_build_info",
+     "expr": "signalbot_build_info{instance=\"${bot}:8080\"}",
      "legendFormat": "{{strategy}} {{strategy_version}}",
      "refId": "A",
      "instant": true,
@@ -354,7 +387,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_build_info",
+     "expr": "signalbot_build_info{instance=\"${bot}:8080\"}",
      "legendFormat": "{{exec_mode}} \u00b7 {{commit}}",
      "refId": "A",
      "instant": true,
@@ -400,7 +433,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(signalbot_trend_symbol_ready * signalbot_trend_symbol_tradable)",
+     "expr": "sum(signalbot_trend_symbol_ready{instance=\"${bot}:8080\"} * signalbot_trend_symbol_tradable{instance=\"${bot}:8080\"})",
      "legendFormat": "ready",
      "refId": "A",
      "instant": true,
@@ -411,7 +444,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(signalbot_trend_symbol_tradable)",
+     "expr": "sum(signalbot_trend_symbol_tradable{instance=\"${bot}:8080\"})",
      "legendFormat": "tradable",
      "refId": "B",
      "instant": true,
@@ -471,7 +504,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "time() - max(signalbot_trend_last_bar_close_timestamp_seconds)",
+     "expr": "time() - max(signalbot_trend_last_bar_close_timestamp_seconds{instance=\"${bot}:8080\"})",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -533,7 +566,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_equity",
+     "expr": "signalbot_portfolio_equity{instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -581,7 +614,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_positions",
+     "expr": "signalbot_portfolio_positions{instance=\"${bot}:8080\"}",
      "legendFormat": "open",
      "refId": "A",
      "instant": true,
@@ -592,7 +625,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_limit{limit=\"max_positions\"}",
+     "expr": "signalbot_portfolio_limit{instance=\"${bot}:8080\", limit=\"max_positions\"}",
      "legendFormat": "limit",
      "refId": "B",
      "instant": true,
@@ -638,7 +671,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_kill_switch_active",
+     "expr": "signalbot_kill_switch_active{instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -700,7 +733,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_circuit_breakers_active",
+     "expr": "signalbot_circuit_breakers_active{instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -760,7 +793,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "changes(process_start_time_seconds{job=\"signal-bot\"}[24h])",
+     "expr": "changes(process_start_time_seconds{job=\"signal-bot\", instance=\"${bot}:8080\"}[24h])",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -824,7 +857,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "time() - signalbot_reconciliation_last_success_timestamp_seconds",
+     "expr": "time() - signalbot_reconciliation_last_success_timestamp_seconds{instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -953,7 +986,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_equity",
+     "expr": "signalbot_portfolio_equity{instance=\"${bot}:8080\"}",
      "legendFormat": "equity",
      "refId": "A",
      "instant": false,
@@ -964,7 +997,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_peak_equity",
+     "expr": "signalbot_portfolio_peak_equity{instance=\"${bot}:8080\"}",
      "legendFormat": "peak",
      "refId": "B",
      "instant": false,
@@ -1030,7 +1063,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_drawdown_ratio",
+     "expr": "signalbot_portfolio_drawdown_ratio{instance=\"${bot}:8080\"}",
      "legendFormat": "drawdown",
      "refId": "A",
      "instant": false,
@@ -1041,7 +1074,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_limit{limit=\"drawdown_reduce\"}",
+     "expr": "signalbot_portfolio_limit{instance=\"${bot}:8080\", limit=\"drawdown_reduce\"}",
      "legendFormat": "risk halved at",
      "refId": "B",
      "instant": false,
@@ -1052,7 +1085,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_limit{limit=\"drawdown_halt\"}",
+     "expr": "signalbot_portfolio_limit{instance=\"${bot}:8080\", limit=\"drawdown_halt\"}",
      "legendFormat": "entries stop at",
      "refId": "C",
      "instant": false,
@@ -1133,7 +1166,7 @@
    "description": "From the trade_results table: each closed paper trade after fees and funding. R = net P&L / intended risk.",
    "datasource": {
     "type": "grafana-postgresql-datasource",
-    "uid": "signalbot-db"
+    "uid": "${tradedb}"
    },
    "gridPos": {
     "x": 0,
@@ -1145,7 +1178,7 @@
     {
      "datasource": {
       "type": "grafana-postgresql-datasource",
-      "uid": "signalbot-db"
+      "uid": "${tradedb}"
      },
      "rawSql": "SELECT count(*) AS \"Closed trades\",\n  avg((realized_r > 0)::int) AS \"Win rate\",\n  avg(realized_r) AS \"Avg R per trade\",\n  sum(net_pnl) AS \"Net P&L\",\n  sum(fees) AS \"Fees\",\n  sum(funding) AS \"Funding\"\nFROM trade_results WHERE $__timeFilter(closed_at)",
      "format": "table",
@@ -1216,7 +1249,7 @@
    "description": "",
    "datasource": {
     "type": "grafana-postgresql-datasource",
-    "uid": "signalbot-db"
+    "uid": "${tradedb}"
    },
    "gridPos": {
     "x": 0,
@@ -1228,7 +1261,7 @@
     {
      "datasource": {
       "type": "grafana-postgresql-datasource",
-      "uid": "signalbot-db"
+      "uid": "${tradedb}"
      },
      "rawSql": "SELECT closed_at AS time, sum(net_pnl) OVER (ORDER BY closed_at) AS \"net P&L\"\nFROM trade_results ORDER BY 1",
      "format": "time_series",
@@ -1252,7 +1285,7 @@
    "description": "Realised R after costs for each trade, oldest first.",
    "datasource": {
     "type": "grafana-postgresql-datasource",
-    "uid": "signalbot-db"
+    "uid": "${tradedb}"
    },
    "gridPos": {
     "x": 12,
@@ -1264,7 +1297,7 @@
     {
      "datasource": {
       "type": "grafana-postgresql-datasource",
-      "uid": "signalbot-db"
+      "uid": "${tradedb}"
      },
      "rawSql": "SELECT closed_at AS time, realized_r AS \"R\" FROM trade_results\nWHERE $__timeFilter(closed_at) ORDER BY 1",
      "format": "table",
@@ -1286,7 +1319,7 @@
    "description": "",
    "datasource": {
     "type": "grafana-postgresql-datasource",
-    "uid": "signalbot-db"
+    "uid": "${tradedb}"
    },
    "gridPos": {
     "x": 0,
@@ -1298,7 +1331,7 @@
     {
      "datasource": {
       "type": "grafana-postgresql-datasource",
-      "uid": "signalbot-db"
+      "uid": "${tradedb}"
      },
      "rawSql": "SELECT symbol AS \"Symbol\", count(*) AS \"Trades\",\n  sum((realized_r > 0)::int) AS \"Wins\", count(*) - sum((realized_r > 0)::int) AS \"Losses\",\n  round(avg(realized_r)::numeric, 3) AS \"Avg R\", round(sum(net_pnl)::numeric, 2) AS \"Net P&L\",\n  round(sum(fees)::numeric, 2) AS \"Fees\"\nFROM trade_results WHERE $__timeFilter(closed_at) GROUP BY symbol ORDER BY \"Net P&L\" DESC",
      "format": "table",
@@ -1320,7 +1353,7 @@
    "description": "",
    "datasource": {
     "type": "grafana-postgresql-datasource",
-    "uid": "signalbot-db"
+    "uid": "${tradedb}"
    },
    "gridPos": {
     "x": 12,
@@ -1332,7 +1365,7 @@
     {
      "datasource": {
       "type": "grafana-postgresql-datasource",
-      "uid": "signalbot-db"
+      "uid": "${tradedb}"
      },
      "rawSql": "SELECT closed_at AS \"Closed\", symbol AS \"Symbol\", side AS \"Side\",\n  round(actual_entry::numeric, 6) AS \"Entry\", round(exit_price::numeric, 6) AS \"Exit price\",\n  exit_reason AS \"Exit reason\", round(realized_r::numeric, 3) AS \"R\", round(net_pnl::numeric, 2) AS \"Net P&L\"\nFROM trade_results ORDER BY closed_at DESC LIMIT 50",
      "format": "table",
@@ -1354,7 +1387,7 @@
    "description": "",
    "datasource": {
     "type": "grafana-postgresql-datasource",
-    "uid": "signalbot-db"
+    "uid": "${tradedb}"
    },
    "gridPos": {
     "x": 0,
@@ -1366,7 +1399,7 @@
     {
      "datasource": {
       "type": "grafana-postgresql-datasource",
-      "uid": "signalbot-db"
+      "uid": "${tradedb}"
      },
      "rawSql": "SELECT exit_reason AS metric, count(*) AS value FROM trade_results\nWHERE $__timeFilter(closed_at) GROUP BY 1",
      "format": "table",
@@ -1400,7 +1433,7 @@
    "description": "Breakouts the shared account could not take (correlated risk, open risk, entries per bar, ...).",
    "datasource": {
     "type": "grafana-postgresql-datasource",
-    "uid": "signalbot-db"
+    "uid": "${tradedb}"
    },
    "gridPos": {
     "x": 8,
@@ -1412,7 +1445,7 @@
     {
      "datasource": {
       "type": "grafana-postgresql-datasource",
-      "uid": "signalbot-db"
+      "uid": "${tradedb}"
      },
      "rawSql": "SELECT replace(cancelled_reason, 'portfolio:', '') AS \"Rule\", count(*) AS \"Refused\",\n  max(created_at) AS \"Latest\"\nFROM signals WHERE cancelled_reason LIKE 'portfolio:%' AND $__timeFilter(created_at)\nGROUP BY 1 ORDER BY 2 DESC",
      "format": "table",
@@ -1434,7 +1467,7 @@
    "description": "",
    "datasource": {
     "type": "grafana-postgresql-datasource",
-    "uid": "signalbot-db"
+    "uid": "${tradedb}"
    },
    "gridPos": {
     "x": 16,
@@ -1446,7 +1479,7 @@
     {
      "datasource": {
       "type": "grafana-postgresql-datasource",
-      "uid": "signalbot-db"
+      "uid": "${tradedb}"
      },
      "rawSql": "SELECT created_at AS \"When\", symbol AS \"Symbol\", side AS \"Side\",\n  CASE WHEN status = 'cancelled' THEN coalesce(cancelled_reason, 'cancelled') ELSE status END AS \"Outcome\",\n  planned_contracts AS \"Contracts\"\nFROM signals WHERE strategy = 'trend_breakout' ORDER BY created_at DESC LIMIT 30",
      "format": "table",
@@ -1495,7 +1528,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_open_risk_ratio",
+     "expr": "signalbot_portfolio_open_risk_ratio{instance=\"${bot}:8080\"}",
      "legendFormat": "actual open risk",
      "refId": "A",
      "instant": false,
@@ -1506,7 +1539,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_limit{limit=\"max_open_risk\"}",
+     "expr": "signalbot_portfolio_limit{instance=\"${bot}:8080\", limit=\"max_open_risk\"}",
      "legendFormat": "entry limit",
      "refId": "B",
      "instant": false,
@@ -1572,7 +1605,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_correlated_risk_ratio",
+     "expr": "signalbot_portfolio_correlated_risk_ratio{instance=\"${bot}:8080\"}",
      "legendFormat": "actual sqrt(r'Cr)",
      "refId": "A",
      "instant": false,
@@ -1583,7 +1616,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_limit{limit=\"max_correlated_risk\"}",
+     "expr": "signalbot_portfolio_limit{instance=\"${bot}:8080\", limit=\"max_correlated_risk\"}",
      "legendFormat": "entry limit",
      "refId": "B",
      "instant": false,
@@ -1649,7 +1682,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_gross_leverage_ratio",
+     "expr": "signalbot_portfolio_gross_leverage_ratio{instance=\"${bot}:8080\"}",
      "legendFormat": "gross leverage",
      "refId": "A",
      "instant": false,
@@ -1660,7 +1693,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_portfolio_limit{limit=\"max_gross_leverage\"}",
+     "expr": "signalbot_portfolio_limit{instance=\"${bot}:8080\", limit=\"max_gross_leverage\"}",
      "legendFormat": "entry limit",
      "refId": "B",
      "instant": false,
@@ -1726,7 +1759,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum by (outcome) (increase(signalbot_trend_decisions_total[4h]))",
+     "expr": "sum by (outcome) (increase(signalbot_trend_decisions_total{instance=\"${bot}:8080\"}[4h]))",
      "legendFormat": "{{outcome}}",
      "refId": "A",
      "instant": false,
@@ -1768,7 +1801,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "time() - signalbot_trend_last_bar_close_timestamp_seconds",
+     "expr": "time() - signalbot_trend_last_bar_close_timestamp_seconds{instance=\"${bot}:8080\"}",
      "legendFormat": "{{symbol}}",
      "refId": "A",
      "instant": false,
@@ -1822,7 +1855,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_trend_symbol_tradable",
+     "expr": "signalbot_trend_symbol_tradable{instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -1834,7 +1867,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_trend_symbol_ready",
+     "expr": "signalbot_trend_symbol_ready{instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "B",
      "instant": true,
@@ -1846,7 +1879,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_trend_history_bars",
+     "expr": "signalbot_trend_history_bars{instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "C",
      "instant": true,
@@ -1904,7 +1937,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_positions_unprotected",
+     "expr": "signalbot_positions_unprotected{instance=\"${bot}:8080\"}",
      "legendFormat": "positions without a stop",
      "refId": "A",
      "instant": false,
@@ -1915,7 +1948,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(signalbot_protective_order_failures_total[1h]))",
+     "expr": "sum(increase(signalbot_protective_order_failures_total{instance=\"${bot}:8080\"}[1h]))",
      "legendFormat": "protective failures (1h)",
      "refId": "B",
      "instant": false,
@@ -1926,7 +1959,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(signalbot_trailing_stop_updates_total{outcome=~\"rejected|unknown\"}[1h]))",
+     "expr": "sum(increase(signalbot_trailing_stop_updates_total{instance=\"${bot}:8080\", outcome=~\"rejected|unknown\"}[1h]))",
      "legendFormat": "trailing amend refused/unknown (1h)",
      "refId": "C",
      "instant": false,
@@ -1937,7 +1970,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(signalbot_trailing_stop_updates_total{outcome=\"moved\"}[4h]))",
+     "expr": "sum(increase(signalbot_trailing_stop_updates_total{instance=\"${bot}:8080\", outcome=\"moved\"}[4h]))",
      "legendFormat": "trailing stops moved (4h)",
      "refId": "D",
      "instant": false,
@@ -1948,7 +1981,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(signalbot_time_stops_total[4h]))",
+     "expr": "sum(increase(signalbot_time_stops_total{instance=\"${bot}:8080\"}[4h]))",
      "legendFormat": "time stops (4h)",
      "refId": "E",
      "instant": false,
@@ -1982,7 +2015,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum by (kind) (increase(signalbot_reconciliation_discrepancies_total[1h]))",
+     "expr": "sum by (kind) (increase(signalbot_reconciliation_discrepancies_total{instance=\"${bot}:8080\"}[1h]))",
      "legendFormat": "{{kind}}",
      "refId": "A",
      "instant": false,
@@ -1993,7 +2026,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "increase(signalbot_reconciliation_failures_total[1h])",
+     "expr": "increase(signalbot_reconciliation_failures_total{instance=\"${bot}:8080\"}[1h])",
      "legendFormat": "failed passes",
      "refId": "B",
      "instant": false,
@@ -2004,7 +2037,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum by (reason) (increase(signalbot_candles_dropped_total[1h]))",
+     "expr": "sum by (reason) (increase(signalbot_candles_dropped_total{instance=\"${bot}:8080\"}[1h]))",
      "legendFormat": "candles dropped: {{reason}}",
      "refId": "C",
      "instant": false,
@@ -2038,7 +2071,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "process_resident_memory_bytes{job=\"signal-bot\"}",
+     "expr": "process_resident_memory_bytes{job=\"signal-bot\", instance=\"${bot}:8080\"}",
      "legendFormat": "bot memory (RSS)",
      "refId": "A",
      "instant": false,
@@ -2049,7 +2082,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "rate(process_cpu_seconds_total{job=\"signal-bot\"}[5m])",
+     "expr": "rate(process_cpu_seconds_total{job=\"signal-bot\", instance=\"${bot}:8080\"}[5m])",
      "legendFormat": "bot CPU (cores)",
      "refId": "B",
      "instant": false,
@@ -2258,7 +2291,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "signalbot_paper_equity",
+     "expr": "signalbot_paper_equity{instance=\"${bot}:8080\"}",
      "legendFormat": "",
      "refId": "A",
      "instant": true,
@@ -2306,7 +2339,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum by (rule) (increase(signalbot_risk_denials_total[1h]))",
+     "expr": "sum by (rule) (increase(signalbot_risk_denials_total{instance=\"${bot}:8080\"}[1h]))",
      "legendFormat": "{{rule}}",
      "refId": "A",
      "instant": false,
@@ -2353,7 +2386,7 @@
       "type": "loki",
       "uid": "loki"
      },
-     "expr": "sum by (level) (count_over_time({service=\"bot\"} [$__auto]))",
+     "expr": "sum by (level) (count_over_time({service=\"$bot\"} [$__auto]))",
      "refId": "A",
      "queryType": "range",
      "legendFormat": "{{level}}"
@@ -2455,7 +2488,7 @@
       "type": "loki",
       "uid": "loki"
      },
-     "expr": "{service=\"bot\", level=~\"$level\", subsystem=~\"$subsystem\"} |~ \"(?i)$search\" | symbol=~\"(?i).*$symbol.*\" | order_id=~\".*$order.*\" | json msg=\"msg\", exc=\"exc\" | line_format `{{ printf \"%-8s\" .level }} {{ .logger }}  {{ if .msg }}{{ .msg }}{{ else }}{{ __line__ }}{{ end }}{{ if .symbol }}  [{{ .symbol }}]{{ end }}{{ if .exc }}\n{{ .exc }}{{ end }}`",
+     "expr": "{service=\"$bot\", level=~\"$level\", subsystem=~\"$subsystem\"} |~ \"(?i)$search\" | symbol=~\"(?i).*$symbol.*\" | order_id=~\".*$order.*\" | json msg=\"msg\", exc=\"exc\" | line_format `{{ printf \"%-8s\" .level }} {{ .logger }}  {{ if .msg }}{{ .msg }}{{ else }}{{ __line__ }}{{ end }}{{ if .symbol }}  [{{ .symbol }}]{{ end }}{{ if .exc }}\n{{ .exc }}{{ end }}`",
      "refId": "A",
      "queryType": "range"
     }

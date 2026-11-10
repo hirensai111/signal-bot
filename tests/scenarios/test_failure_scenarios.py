@@ -296,6 +296,9 @@ async def test_reordered_venue_events_converge_to_correct_state(tmp_path):
     """Stream delivers final-before-partial; the REST response is lost so only the
     (reordered) stream can tell us what happened."""
     h = await Harness.create(tmp_path)
+    # One-tick IOC limit so exactly two of the three 40-lot levels fill (80): this test is
+    # about event ordering, not the entry slippage allowance.
+    h.engine.config.entry_limit_slippage_bps = Decimal("0")
     h.venue.set_book("BTCUSD", Decimal("64999.5"), Decimal("65000"), size=Decimal("40"), levels=3)
     h.venue.faults.add("stream", "reorder_events")
     h.venue.faults.add("place_order", "timeout_after_accept")

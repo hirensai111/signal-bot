@@ -8,6 +8,7 @@
 # (`tailscale serve`, set up by deploy/bootstrap-ubuntu.sh); nothing is public.
 #   Grafana        127.0.0.1:3000   dashboards, logs (read-only for viewers)
 #   Control room   127.0.0.1:8080   status; halt/resume need OPERATOR_TOKEN
+#   Control room   127.0.0.1:8081   the optional second paper bot (profile "tp", below)
 #   Prometheus     127.0.0.1:9090   Alertmanager 127.0.0.1:9093   Loki 127.0.0.1:3100
 
 x-logging: &logging
@@ -64,6 +65,37 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
     ports: ["127.0.0.1:8080:8080"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *logging
+
+  # Optional second paper bot for a side-by-side forward test: the same entries with a
+  # fixed +1.5R take-profit and no trailing stop (trend_portfolio_tp15.toml).  Its own
+  # $10k paper account, database (signal_bot_tp, created by db-roles), state volume and
+  # control room on 8081.  Off unless started with the "tp" profile:
+  #   docker compose --profile tp up -d bot-tp
+  bot-tp:
+    image: signal-bot:${SIGNAL_BOT_COMMIT:-local}
+    pull_policy: never  # built by the "bot" service (docker compose build bot)
+    profiles: ["tp"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://signalbot:${POSTGRES_PASSWORD}@postgres:5432/signal_bot_tp
+      STRATEGY_CONFIG: signal_bot/research/strategies/trend_portfolio_tp15.toml
+      EXEC_MODE: paper
+      PAPER_ONLY: "true"
+      OPS_HOST: 0.0.0.0
+      LOG_FORMAT: json
+      PAPER_STATE_PATH: /home/bot/data/paper_state.json
+      # Shares the Telegram bot and chat: messages are tagged, and only the main bot
+      # answers commands (Telegram allows one command listener per bot token).
+      BOT_LABEL: "TP 1.5R"
+      TELEGRAM_COMMANDS: "false"
+    volumes: [botdata-tp:/home/bot/data]
+    depends_on:
+      postgres: {condition: service_healthy}
+      db-roles: {condition: service_completed_successfully}
+    ports: ["127.0.0.1:8081:8080"]
     restart: unless-stopped
     stop_grace_period: 30s
     logging: *logging
@@ -168,6 +200,7 @@ services:
       - ./deploy/backup/backup.sh:/backup.sh:ro
       - ./backups:/backups
       - botdata:/botdata:ro
+      - botdata-tp:/botdata-tp:ro
     entrypoint: ["sh", "/backup.sh"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -177,6 +210,7 @@ services:
 volumes:
   pgdata:
   botdata:
+  botdata-tp:
   prometheus-data:
   alertmanager-data:
   loki-data:
