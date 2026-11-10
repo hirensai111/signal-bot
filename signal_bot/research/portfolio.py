@@ -123,14 +123,16 @@ def _random_decisions(sym: _Symbol, real: dict[int, Any], params: TrendParams, r
     for i in sorted(rng.sample(eligible, k)):
         side = rng.choice(["long", "short"])
         risk = params.stop_atr * a[i]
+        sign = 1.0 if side == "long" else -1.0
         out[i] = _Decision(
             i,
             side,
             float(c[i]),
-            float(c[i] - risk if side == "long" else c[i] + risk),
+            float(c[i] - sign * risk),
             float(params.trail_atr * a[i]),
             rng.random(),
             params.max_hold_bars,
+            float(c[i] + sign * params.take_profit_r * risk) if params.take_profit_r > 0 else None,
         )
     return out
 
@@ -144,6 +146,7 @@ class _Decision:
     trail_distance: float
     strength: float
     max_hold_bars: int
+    take_profit: float | None = None
 
 
 def run_portfolio(
@@ -278,7 +281,9 @@ def run_portfolio(
                 d.side,
                 d.entry,
                 d.stop,
-                NO_TARGET if d.side == "long" else -NO_TARGET,
+                d.take_profit
+                if d.take_profit is not None
+                else (NO_TARGET if d.side == "long" else -NO_TARGET),
                 d.max_hold_bars,
                 "breakout",
                 d.trail_distance,

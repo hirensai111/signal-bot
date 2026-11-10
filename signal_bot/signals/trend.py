@@ -15,6 +15,11 @@ Indicator definitions (unchanged from the published research):
 * Donchian channel: highest high / lowest low of the previous ``entry_lookback`` bars.
 * Trend filter: ``ewm(span=trend_ema, adjust=False)`` of the close.
 * Volume filter: the bar's volume >= ``breakout_volume_mult`` x the mean of the previous 20 bars.
+
+Exits are the fill model's / the execution engine's job; the decision only carries the
+levels: the initial stop (``stop_atr`` x ATR), the trailing distance (``trail_atr`` x ATR,
+0 = no trailing) and an optional fixed take-profit ``take_profit_r`` x the initial risk
+from the entry (0 = no target).
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ class TrendParams:
     allow_short: bool = True
     max_hold_bars: int = 180
     min_stop_bps: float = 0.0
+    take_profit_r: float = 0.0  # 0 = no fixed target; otherwise entry +/- this many R
 
     @classmethod
     def from_mapping(cls, params: dict[str, Any]) -> TrendParams:
@@ -70,6 +76,7 @@ class TrendDecision:
     ema: float | None
     volume_ratio: float | None
     max_hold_bars: int
+    take_profit: float | None = None  # fixed target price, None = no target
 
     @property
     def strength(self) -> float:
@@ -124,6 +131,11 @@ def trend_decisions(frame: pd.DataFrame, p: TrendParams, start: int = 0) -> list
             side, stop, channel = "short", c[i] + risk, lower[i]
         else:
             continue
+        target = None
+        if p.take_profit_r > 0:
+            target = (
+                c[i] + p.take_profit_r * risk if side == "long" else c[i] - p.take_profit_r * risk
+            )
         out.append(
             TrendDecision(
                 bar=i,
@@ -139,6 +151,7 @@ def trend_decisions(frame: pd.DataFrame, p: TrendParams, start: int = 0) -> list
                 if np.isfinite(vol_mean[i]) and vol_mean[i] > 0
                 else None,
                 max_hold_bars=p.max_hold_bars,
+                take_profit=None if target is None else float(target),
             )
         )
     return out

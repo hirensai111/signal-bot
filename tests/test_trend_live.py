@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import tomllib
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -288,6 +289,23 @@ async def test_simultaneous_breakouts_are_batched_ranked_and_sized_on_shared_equ
     async with env["factory"]() as session:
         rows = (await session.execute(select(Signal))).scalars().all()
     assert {r.status for r in rows} == {"pending"} and len(rows) == 2
+
+
+async def test_fixed_target_variant_sends_the_target_and_no_trail(pipeline_env):
+    """The second paper bot's strategy: same entries, +1.5R target, fixed stop."""
+    env = pipeline_env
+    pipe, frames, clock = env["pipe"], env["frames"], env["clock"]
+    pipe.generator.params = replace(pipe.generator.params, trail_atr=0.0, take_profit_r=1.5)
+    clock.set(env["last_close"] + timedelta(seconds=2))
+    for sym in ("AAAUSDT", "BBBUSDT"):
+        await pipe.handle_candle(klines(frames[sym].iloc[-1:], sym)[0])
+    sigs = [env["signal_q"].get_nowait() for _ in range(env["signal_q"].qsize())]
+    assert len(sigs) == 2
+    for s in sigs:
+        assert not s.trail_distance
+        risk = s.entry - s.stop_loss  # longs
+        assert s.take_profit == pytest.approx(s.entry + Decimal("1.5") * risk, rel=Decimal("1e-9"))
+        assert s.time_stop_at == env["last_close"] + STEP * 181  # time stop still applies
 
 
 async def test_late_candles_update_history_but_never_trade(pipeline_env):

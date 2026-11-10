@@ -24,7 +24,7 @@ import enum
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 
@@ -73,6 +73,11 @@ def client_order_id_for(signal_id) -> str:
 @dataclass
 class ExecutionConfig:
     order_type: str = "limit_ioc"
+    # How far past the best price an IOC entry may fill.  One tick was too tight: the book
+    # moves in the ~0.2 s between reading it and matching, so fast breakouts went unfilled
+    # (ioc_no_liquidity).  10 bps on top of the 0.15 % basis gate keeps the worst entry
+    # within the research fill model's 30 bps slippage limit.
+    entry_limit_slippage_bps: Decimal = Decimal("10")
     basis_abort_pct: Decimal = BASIS_ABORT_PCT
     max_book_age_seconds: float = 10.0
     max_signal_age_seconds: float = 420.0
@@ -304,8 +309,9 @@ class ExecutionEngine:
 
         side = "buy" if fresh.side == "long" else "sell"
         if self.config.order_type == "limit_ioc":
-            limit = book.best_ask + tick if side == "buy" else book.best_bid - tick
-            limit = self.round_to_tick(limit, tick)
+            limit = self.entry_limit_price(
+                side, book.best_bid, book.best_ask, tick, self.config.entry_limit_slippage_bps
+            )
         else:
             limit = None
 
@@ -766,6 +772,26 @@ class ExecutionEngine:
             )
         except Exception:
             logger.exception("publish %s failed", event_type)
+
+    @staticmethod
+    def entry_limit_price(
+        side: str, best_bid: Decimal, best_ask: Decimal, tick: Decimal, slippage_bps: Decimal
+    ) -> Decimal:
+        """IOC limit: at least one tick through the touch, up to ``slippage_bps`` beyond it.
+
+        Rounded away from the touch for a buy (up) and a sell (down), so the allowance is
+        never smaller than asked for.
+        """
+        frac = Decimal(str(slippage_bps)) / Decimal("10000")
+        if side == "buy":
+            limit = best_ask * (1 + frac)
+            if tick > 0:
+                limit = (limit / tick).to_integral_value(rounding=ROUND_CEILING) * tick
+            return max(limit, best_ask + tick)
+        limit = best_bid * (1 - frac)
+        if tick > 0:
+            limit = (limit / tick).to_integral_value(rounding=ROUND_FLOOR) * tick
+        return min(limit, best_bid - tick)
 
     @staticmethod
     def round_to_tick(value: Decimal, tick: Decimal) -> Decimal:

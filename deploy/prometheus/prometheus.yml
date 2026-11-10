@@ -10,6 +10,18 @@ scrape_configs:
   - job_name: signal-bot
     static_configs:
       - targets: ["bot:8080"]
+    # The optional second paper bot (compose profile "tp") is found by its container
+    # name, so it has no target at all (and raises no BotDown) unless it is running.
+    dns_sd_configs:
+      - names: ["bot-tp"]
+        type: A
+        port: 8080
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        regex: bot-tp
+        target_label: instance
+        replacement: bot-tp:8080
   - job_name: node
     static_configs:
       - targets: ["node-exporter:9100"]

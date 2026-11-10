@@ -351,9 +351,9 @@ td.r, th.r { text-align: right; }
 
     <section class="panel full" aria-labelledby="protection-title">
       <h3 id="protection-title">Stops and exits</h3>
-      <p class="hint">Trailing stops move once per completed 4h bar, never looser, and are resting orders on the exchange. "Next stop" is where the strategy's rule puts the stop now.</p>
+      <p class="hint">Trailing stops move once per completed 4h bar, never looser, and are resting orders on the exchange. "Next stop" is where the strategy's rule puts the stop now. "Target" is the fixed take-profit, if the strategy uses one.</p>
       <div class="table-scroll"><table>
-        <thead><tr><th>Symbol</th><th>Side</th><th>Stop type</th><th class="r">Initial stop</th><th class="r">Stop on exchange</th><th class="r">Next stop</th><th class="r">Trail</th><th class="r">Best price</th><th>Last moved</th><th>Time stop</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Side</th><th>Stop type</th><th class="r">Initial stop</th><th class="r">Stop on exchange</th><th class="r">Next stop</th><th class="r">Target</th><th class="r">Trail</th><th class="r">Best price</th><th>Last moved</th><th>Time stop</th></tr></thead>
         <tbody id="protection"></tbody>
       </table></div>
     </section>
@@ -428,6 +428,9 @@ td.r, th.r { text-align: right; }
     new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: v >= 100000 ? 0 : 2 }).format(v);
   const fmtNum = (v, d = 2) => v == null || v === "" || isNaN(Number(v)) ? "–" :
     Number(v).toLocaleString(undefined, { maximumFractionDigits: d });
+  // Prices keep their significant digits: 0.07183 and 2,125.25 both read correctly.
+  const fmtPrice = (v) => v == null || v === "" || isNaN(Number(v)) ? "–" :
+    Number(v).toLocaleString(undefined, { maximumSignificantDigits: 7 });
   const fmtTime = (iso) => {
     if (!iso) return "–";
     const d = new Date(iso);
@@ -691,8 +694,8 @@ td.r, th.r { text-align: right; }
     fill($("positions"), (s.positions || []).map((p) => row([
       p.symbol,
       { text: fmtNum(p.size, 4), cls: "r num" },
-      { text: fmtNum(p.entry_price, 2), cls: "r num" },
-      { text: p.stop_loss_price ? fmtNum(p.stop_loss_price, 4) : "–", cls: "r num" },
+      { text: fmtPrice(p.entry_price), cls: "r num" },
+      { text: p.stop_loss_price ? fmtPrice(p.stop_loss_price) : "–", cls: "r num" },
       !p.has_stop_loss ? pill("No stop", "bad") : p.trail_amount ? pill("Venue trailing stop", "good") : pill("Stop on venue", "good"),
       fmtTime(p.updated_at || p.as_of),
     ])), "No open positions.", 6);
@@ -703,14 +706,15 @@ td.r, th.r { text-align: right; }
       return row([
         o.symbol, o.side === "buy" ? "Long" : "Short",
         o.stop_mode === "fixed" ? sentence("fixed") : pill(sentence(o.stop_mode), "info"),
-        { text: fmtNum(o.initial_stop, 4), cls: "r num" },
-        { text: fmtNum(o.current_stop, 4), cls: "r num" },
-        behind ? pill(fmtNum(o.next_stop, 4) + " (pending)", "warn") : { text: o.next_stop ? fmtNum(o.next_stop, 4) : "–", cls: "r num" },
-        { text: o.trail_distance ? fmtNum(o.trail_distance, 4) : "–", cls: "r num" },
-        { text: o.best_reference_price ? fmtNum(o.best_reference_price, 4) : "–", cls: "r num" },
+        { text: fmtPrice(o.initial_stop), cls: "r num" },
+        { text: fmtPrice(o.current_stop), cls: "r num" },
+        behind ? pill(fmtPrice(o.next_stop) + " (pending)", "warn") : { text: o.next_stop ? fmtPrice(o.next_stop) : "–", cls: "r num" },
+        { text: o.take_profit ? fmtPrice(o.take_profit) : "–", cls: "r num" },
+        { text: o.trail_distance && Number(o.trail_distance) ? fmtPrice(o.trail_distance) : "–", cls: "r num" },
+        { text: o.best_reference_price ? fmtPrice(o.best_reference_price) : "–", cls: "r num" },
         fmtTime(o.stop_updated_at), fmtTime(o.time_stop_at),
       ]);
-    }), Array.isArray(s.protection) ? "No open positions." : `Unavailable: ${s.protection && s.protection.error}`, 10);
+    }), Array.isArray(s.protection) ? "No open positions." : `Unavailable: ${s.protection && s.protection.error}`, 11);
 
     const pf = $("portfolio");
     pf.replaceChildren();
@@ -754,7 +758,7 @@ td.r, th.r { text-align: right; }
       o.client_order_id, o.symbol, o.side === "buy" ? "Long" : "Short",
       pill(sentence(o.state), ORDER_TONE[o.state] || ""),
       { text: `${fmtNum(o.filled, 4)} / ${fmtNum(o.size, 4)}`, cls: "r num" },
-      { text: o.avg_price ? fmtNum(o.avg_price, 2) : "–", cls: "r num" },
+      { text: o.avg_price ? fmtPrice(o.avg_price) : "–", cls: "r num" },
       o.protective === "confirmed" ? pill("Confirmed", "good")
         : o.protective === "failed" ? pill("Failed", "bad")
         : o.protective === "recovered" ? pill("Recovered", "warn")

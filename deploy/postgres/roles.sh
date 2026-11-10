@@ -1,5 +1,6 @@
 #!/bin/sh
-# Idempotent: a read-only role for Grafana's trade-performance panels.
+# Idempotent: a read-only role for Grafana's trade-performance panels, and the database
+# of the optional second paper bot (signal_bot_tp, compose profile "tp").
 # Runs on every `docker compose up` (one-shot service), so existing databases get it too.
 set -eu
 until pg_isready -q; do sleep 1; done
@@ -14,5 +15,12 @@ GRANT USAGE ON SCHEMA public TO grafana_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
 -- tables the bot creates later (it owns them as signalbot)
 ALTER DEFAULT PRIVILEGES FOR ROLE signalbot IN SCHEMA public GRANT SELECT ON TABLES TO grafana_ro;
+SELECT 'CREATE DATABASE signal_bot_tp OWNER signalbot'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'signal_bot_tp') \gexec
+GRANT CONNECT ON DATABASE signal_bot_tp TO grafana_ro;
+\connect signal_bot_tp
+GRANT USAGE ON SCHEMA public TO grafana_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
+ALTER DEFAULT PRIVILEGES FOR ROLE signalbot IN SCHEMA public GRANT SELECT ON TABLES TO grafana_ro;
 SQL
-echo "grafana_ro role ready (read-only)"
+echo "grafana_ro role ready (read-only); database signal_bot_tp ready"
