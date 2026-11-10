@@ -1,0 +1,14 @@
+DELTA TESTNET — GUARDED FILL TEST
+
+Preflight checks               PASS
+Entry order acknowledged       PASS
+Entry fill confirmed           PASS
+REST / WebSocket match         PASS
+User trade parsed              PASS
+Fees reconciled                PASS
+Protective stop confirmed      PASS
+Reduce-only close              PASS
+Account flat                   PASS
+Remaining orders: 0            PASS
+
+RESULT: PASS

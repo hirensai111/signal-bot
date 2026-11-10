@@ -30,7 +30,7 @@ from datetime import timedelta
 
 from signal_bot.core.clock import SYSTEM_CLOCK, Clock, utc
 from signal_bot.events.envelope import Event, EventType, deterministic_event_id
-from signal_bot.execution.adapter import AuthenticationFailed, ExchangeError
+from signal_bot.execution.adapter import AuthenticationFailed, ExchangeError, ExchangeUnavailable
 from signal_bot.execution.engine import CLIENT_ORDER_PREFIX
 from signal_bot.execution.order_store import OrderStore, local_event_id
 from signal_bot.execution.orders import OrderState
@@ -231,20 +231,22 @@ class Reconciler:
         for order in await self.store.in_states([S.FILLED, S.PARTIALLY_FILLED]):
             owned_symbols.add(order.symbol)
             pos = pos_by_symbol.get(order.symbol)
+            if pos is not None and not pos.has_stop_loss and order.protective_status != "flattened":
+                unprotected += 1
+                metrics.RECONCILIATION_DISCREPANCIES.labels("missing_protective").inc()
+                found.append({"kind": "missing_protective", "order": order.client_order_id})
+                if self.engine is not None:
+                    await self.engine.ensure_protection(order.client_order_id, recheck=True)
+            await self._backfill_entry_fills(order.client_order_id)
             if pos is None:
                 if S(order.state) == S.FILLED and self.outcome_monitor is not None:
                     metrics.RECONCILIATION_DISCREPANCIES.labels("missed_close").inc()
                     found.append({"kind": "missed_close", "order": order.client_order_id})
                     await self.outcome_monitor.reconstruct_close(order)
                 continue
-            if not pos.has_stop_loss and order.protective_status != "flattened":
-                unprotected += 1
-                metrics.RECONCILIATION_DISCREPANCIES.labels("missing_protective").inc()
-                found.append({"kind": "missing_protective", "order": order.client_order_id})
-                if self.engine is not None:
-                    await self.engine.ensure_protection(order.client_order_id, recheck=True)
-            elif (
-                order.trail_mode == "stepped"
+            if (
+                pos.has_stop_loss
+                and order.trail_mode == "stepped"
                 and pos.stop_loss_price is not None
                 and order.current_stop_price is not None
                 and pos.stop_loss_price != order.current_stop_price
@@ -306,6 +308,16 @@ class Reconciler:
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
+    async def _backfill_entry_fills(self, client_order_id: str) -> None:
+        """A venue state update alone does not recover executions missed offline."""
+        for fill in await self.adapter.fills_for(client_order_id):
+            await self.store.record_fill(fill, self.adapter.venue)
+        order = await self.store.get_by_client_id(client_order_id)
+        fills = await self.store.fills_for(client_order_id)
+        entry_qty = sum((f.qty for f in fills if f.purpose == "entry"), start=0)
+        if order is not None and entry_qty < (order.filled_size or 0):
+            raise ExchangeUnavailable("entry fill history not yet complete")
+
     def _discrepancy(self, kind: str, coid: str, result) -> dict:
         metrics.RECONCILIATION_DISCREPANCIES.labels(kind).inc()
         return {

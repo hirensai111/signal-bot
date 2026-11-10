@@ -382,14 +382,33 @@ class DeltaExchangeAdapter:
         except Exception as exc:
             raise ExchangeUnavailable(str(exc)) from exc
         out = []
+        exit_orders: dict[str, dict] = {}
         for row in _result(resp) or []:
             fill = parse_fill(row, client_order_id)
             if fill.side != exit_side or str(row.get("order_id")) == order.exchange_order_id:
                 continue
             if since is not None and fill.occurred_at < since:
                 continue
-            if fill.purpose == FillPurpose.ENTRY:
-                fill = replace(fill, purpose=FillPurpose.UNKNOWN)
+            if fill.purpose in (FillPurpose.ENTRY, FillPurpose.UNKNOWN):
+                # The fill feed usually omits stop_order_type and bracket child
+                # client IDs. Resolve the actual child order instead of guessing
+                # stop/TP purpose from the execution price (which may gap).
+                exit_id = str(row.get("order_id") or "")
+                if exit_id:
+                    if exit_id not in exit_orders:
+                        try:
+                            detail = await self.client.get_order_status(exit_id)
+                        except Exception as exc:
+                            raise ExchangeUnavailable("exit order details unavailable") from exc
+                        exit_orders[exit_id] = _result(detail) or {}
+                    detail = exit_orders[exit_id]
+                    if not isinstance(detail, dict) or str(detail.get("id")) != exit_id:
+                        raise ExchangeUnavailable("exit order identity mismatch")
+                    purpose = _purpose(detail)
+                    fill = replace(
+                        fill,
+                        purpose=FillPurpose.UNKNOWN if purpose == FillPurpose.ENTRY else purpose,
+                    )
             out.append(fill)
         return out
 

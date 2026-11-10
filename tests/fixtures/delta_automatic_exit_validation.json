@@ -1,0 +1,22 @@
+{
+  "environment": "testnet",
+  "result": "PASS",
+  "checks": {
+    "Stop-loss triggered": "PASS",
+    "Stop-loss fill parsed": "PASS",
+    "Take-profit triggered": "PASS",
+    "Take-profit fill parsed": "PASS",
+    "Sibling order cleanup": "PASS",
+    "Outcomes recorded once": "PASS",
+    "Restart reconciliation": "PASS",
+    "No duplicate submissions": "PASS",
+    "Protection preserved": "PASS",
+    "Final account flat": "PASS",
+    "Residual orders: 0": "PASS"
+  },
+  "scenario_results": {
+    "stop_loss": "PASS",
+    "take_profit": "PASS",
+    "restart": "PASS"
+  }
+}

@@ -1,0 +1,19 @@
+DELTA TESTNET — AUTOMATIC EXIT VALIDATION
+
+Scenario: restart
+Preflight checks               PASS
+Sibling order cleanup          PASS
+Outcomes recorded once         PASS
+No duplicate submissions       PASS
+Final account flat             PASS
+Residual orders: 0             PASS
+Restart reconciliation         PASS
+Protection preserved           PASS
+Entry order acknowledged       PASS
+Entry fill confirmed           PASS
+Protective stop confirmed      PASS
+Account flat                   PASS
+Remaining orders: 0            PASS
+Reduce-only close              PASS
+
+RESULT: PASS

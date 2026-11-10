@@ -163,7 +163,8 @@ class OutcomeMonitor:
     async def reconstruct_close(self, order: Order) -> bool:
         """Fetch exit fills from the venue if the stream didn't deliver them, then close."""
         fills = await self.store.fills_for(order.client_order_id)
-        if not any(f.purpose in EXIT_PURPOSES for f in fills) and self.adapter is not None:
+        exit_qty = sum((f.qty for f in fills if f.purpose in EXIT_PURPOSES), Decimal("0"))
+        if exit_qty < (order.filled_size or 0) and self.adapter is not None:
             for attempt in range(self.exit_fill_retries):
                 try:
                     venue_fills = await self.adapter.exit_fills(
@@ -178,7 +179,9 @@ class OutcomeMonitor:
                     break
                 if attempt < self.exit_fill_retries - 1:
                     await asyncio.sleep(self.exit_fill_retry_delay)
-        return await self.close_trade(order)
+        # A realtime flat update can precede REST fill-history publication.
+        # Leave the order reconcilable until complete exit fills are evidenced.
+        return await self._maybe_close(order.client_order_id)
 
     # ------------------------------------------------------------------
     # the exactly-once close
@@ -201,6 +204,10 @@ class OutcomeMonitor:
                     await session.execute(select(Fill).where(Fill.client_order_id == coid))
                 ).scalars()
                 fills = list(rows)
+                exit_qty = sum((f.qty for f in fills if f.purpose in EXIT_PURPOSES), Decimal("0"))
+                if not order.filled_size or exit_qty < order.filled_size:
+                    logger.warning("Deferring outcome until complete exit fills are available")
+                    return False
                 result = compute_trade_result(order, fills, self._funding(order))
                 closed_at = result["closed_at"] or self.clock.now()
                 outcome = SignalOutcome(

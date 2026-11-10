@@ -1,0 +1,1055 @@
+{
+  "environment": "testnet",
+  "test": "fill_then_controlled_close",
+  "results": {
+    "Preflight checks": "PASS",
+    "Entry order acknowledged": "PASS",
+    "Entry fill confirmed": "PASS",
+    "REST / WebSocket match": "PASS",
+    "User trade parsed": "PASS",
+    "Fees reconciled": "PASS",
+    "Protective stop confirmed": "PASS",
+    "Reduce-only close": "PASS",
+    "Account flat": "PASS",
+    "Remaining orders: 0": "PASS"
+  },
+  "result": "PASS",
+  "entry_halted": true,
+  "stage_error": null,
+  "cleanup_error": null,
+  "exchanges": [
+    {
+      "name": "public_contract",
+      "payload": {
+        "contract_value": "0.001",
+        "notional_type": "vanilla",
+        "symbol": "BTCUSD",
+        "trading_status": "operational",
+        "tick_size": "0.1",
+        "state": "live",
+        "contract_type": "perpetual_futures",
+        "contract_unit_currency": "BTC"
+      }
+    },
+    {
+      "name": "ws_auth",
+      "payload": {
+        "status": "authenticated",
+        "status_code": 200,
+        "success": true,
+        "type": "key-auth"
+      }
+    },
+    {
+      "name": "ws_subscriptions",
+      "payload": {
+        "channels": [
+          {
+            "name": "orders",
+            "symbols": [
+              "BTCUSD"
+            ]
+          },
+          {
+            "name": "positions",
+            "symbols": [
+              "BTCUSD"
+            ]
+          },
+          {
+            "name": "user_trades",
+            "symbols": [
+              "BTCUSD"
+            ]
+          }
+        ],
+        "type": "subscriptions"
+      }
+    },
+    {
+      "name": "ws_positions_baseline",
+      "payload": {
+        "action": "snapshot",
+        "result": [],
+        "success": true,
+        "type": "positions"
+      }
+    },
+    {
+      "name": "ws_orders_baseline",
+      "payload": {
+        "action": "snapshot",
+        "result": [],
+        "type": "orders"
+      }
+    },
+    {
+      "name": "entry_request",
+      "payload": {
+        "product_id": 84,
+        "size": 1,
+        "side": "buy",
+        "order_type": "limit_order",
+        "time_in_force": "ioc",
+        "limit_price": "78021.5",
+        "post_only": false,
+        "reduce_only": false,
+        "client_order_id": "fixture_fill_1",
+        "bracket_stop_trigger_method": "last_traded_price",
+        "bracket_stop_loss_price": "76380.7",
+        "bracket_take_profit_price": "79502.4"
+      }
+    },
+    {
+      "name": "ws_orders",
+      "payload": {
+        "limit_price": "78021.5",
+        "bracket_order": null,
+        "product_symbol": "BTCUSD",
+        "reason": null,
+        "bracket_take_profit_price": "79502.4",
+        "bracket_stop_loss_limit_price": null,
+        "updated_at": "2026-11-01T11:43:59.477636Z",
+        "bracket_trail_amount": null,
+        "average_fill_price": null,
+        "size": 1,
+        "symbol": "BTCUSD",
+        "order_type": "limit_order",
+        "stop_order_type": null,
+        "created_at": "2026-11-01T11:43:59.477636Z",
+        "trail_amount": null,
+        "unfilled_size": 1,
+        "timestamp": 1793533439616396,
+        "cancellation_reason": null,
+        "bracket_take_profit_limit_price": null,
+        "time_in_force": "ioc",
+        "id": 710000001,
+        "commission": "0",
+        "paid_commission": "0",
+        "client_order_id": "fixture_fill_1",
+        "seq_no": 3,
+        "stop_price": null,
+        "stop_trigger_method": null,
+        "state": "open",
+        "bracket_stop_loss_price": "76380.7",
+        "type": "orders",
+        "side": "buy",
+        "product_id": 84,
+        "reduce_only": false,
+        "action": "create"
+      }
+    },
+    {
+      "name": "ws_orders",
+      "payload": {
+        "timestamp": 1793533439811788,
+        "stop_trigger_method": "last_traded_price",
+        "product_symbol": "BTCUSD",
+        "bracket_stop_loss_price": null,
+        "id": 710000002,
+        "commission": "0",
+        "type": "orders",
+        "bracket_take_profit_limit_price": null,
+        "bracket_order": true,
+        "side": "sell",
+        "limit_price": null,
+        "cancellation_reason": null,
+        "updated_at": "2026-11-01T11:43:59.766745Z",
+        "created_at": "2026-11-01T11:43:59.612522Z",
+        "action": "create",
+        "seq_no": 5,
+        "stop_order_type": "stop_loss_order",
+        "symbol": "BTCUSD",
+        "stop_price": "76380.7",
+        "client_order_id": null,
+        "average_fill_price": null,
+        "bracket_trail_amount": null,
+        "bracket_take_profit_price": null,
+        "trail_amount": null,
+        "reduce_only": true,
+        "size": 1,
+        "bracket_stop_loss_limit_price": null,
+        "product_id": 84,
+        "paid_commission": "0",
+        "reason": "stop_create",
+        "order_type": "market_order",
+        "time_in_force": "gtc",
+        "unfilled_size": 1,
+        "state": "pending"
+      }
+    },
+    {
+      "name": "ws_orders",
+      "payload": {
+        "timestamp": 1793533439811802,
+        "stop_trigger_method": "last_traded_price",
+        "product_symbol": "BTCUSD",
+        "bracket_stop_loss_price": null,
+        "id": 710000003,
+        "commission": "0",
+        "type": "orders",
+        "bracket_take_profit_limit_price": null,
+        "bracket_order": true,
+        "side": "sell",
+        "limit_price": null,
+        "cancellation_reason": null,
+        "updated_at": "2026-11-01T11:43:59.809833Z",
+        "created_at": "2026-11-01T11:43:59.613070Z",
+        "action": "create",
+        "seq_no": 6,
+        "stop_order_type": "take_profit_order",
+        "symbol": "BTCUSD",
+        "stop_price": "79502.4",
+        "client_order_id": null,
+        "average_fill_price": null,
+        "bracket_trail_amount": null,
+        "bracket_take_profit_price": null,
+        "trail_amount": null,
+        "reduce_only": true,
+        "size": 1,
+        "bracket_stop_loss_limit_price": null,
+        "product_id": 84,
+        "paid_commission": "0",
+        "reason": "stop_create",
+        "order_type": "market_order",
+        "time_in_force": "gtc",
+        "unfilled_size": 1,
+        "state": "pending"
+      }
+    },
+    {
+      "name": "ws_positions",
+      "payload": {
+        "reason": null,
+        "size": 1,
+        "timestamp": 1793533439812523,
+        "type": "positions",
+        "action": "create",
+        "symbol": "BTCUSD",
+        "entry_price": "77943.5",
+        "product_symbol": "BTCUSD",
+        "product_id": 84,
+        "commission": "0.045986665"
+      }
+    },
+    {
+      "name": "ws_orders",
+      "payload": {
+        "timestamp": 1793533439765914,
+        "stop_trigger_method": null,
+        "product_symbol": "BTCUSD",
+        "bracket_stop_loss_price": "76380.7",
+        "id": 710000001,
+        "commission": "0",
+        "type": "orders",
+        "bracket_take_profit_limit_price": null,
+        "bracket_order": null,
+        "side": "buy",
+        "limit_price": "78021.5",
+        "cancellation_reason": null,
+        "updated_at": "2026-11-01T11:43:59.477636Z",
+        "created_at": "2026-11-01T11:43:59.477636Z",
+        "action": "delete",
+        "seq_no": 4,
+        "fill_id": 710000004,
+        "stop_order_type": null,
+        "symbol": "BTCUSD",
+        "stop_price": null,
+        "client_order_id": "fixture_fill_1",
+        "average_fill_price": "77943.5",
+        "bracket_trail_amount": null,
+        "bracket_take_profit_price": "79502.4",
+        "trail_amount": null,
+        "reduce_only": false,
+        "size": 1,
+        "bracket_stop_loss_limit_price": null,
+        "product_id": 84,
+        "paid_commission": "0.04598667",
+        "reason": "fill",
+        "order_type": "limit_order",
+        "time_in_force": "ioc",
+        "unfilled_size": 0,
+        "state": "closed"
+      }
+    },
+    {
+      "name": "ws_user_trades",
+      "payload": {
+        "reason": "normal",
+        "size": 1,
+        "timestamp": 1793533439617864,
+        "type": "user_trades",
+        "action": "fill",
+        "symbol": "BTCUSD",
+        "role": "taker",
+        "side": "buy",
+        "price": "77943.5",
+        "product_id": 84,
+        "post_only": false,
+        "client_order_id": "fixture_fill_1",
+        "commission": "0.04598667",
+        "order_id": 710000001,
+        "seq_no": 1,
+        "fill_id": 710000004
+      }
+    },
+    {
+      "name": "entry_ack",
+      "payload": {
+        "meta": {},
+        "success": true,
+        "result": {
+          "limit_price": "78021.5",
+          "bracket_order": null,
+          "product_symbol": "BTCUSD",
+          "bracket_take_profit_price": "79502.4",
+          "bracket_stop_loss_limit_price": null,
+          "updated_at": "2026-11-01T11:43:59.628970Z",
+          "bracket_trail_amount": null,
+          "average_fill_price": "77943.5",
+          "size": 1,
+          "order_type": "limit_order",
+          "stop_order_type": null,
+          "created_at": "2026-11-01T11:43:59.477636Z",
+          "trail_amount": null,
+          "unfilled_size": 0,
+          "cancellation_reason": null,
+          "bracket_take_profit_limit_price": null,
+          "time_in_force": "ioc",
+          "id": 710000001,
+          "commission": "0",
+          "paid_commission": "0.04598667",
+          "client_order_id": "fixture_fill_1",
+          "stop_price": null,
+          "stop_trigger_method": null,
+          "state": "closed",
+          "bracket_stop_loss_price": "76380.7",
+          "side": "buy",
+          "product_id": 84,
+          "reduce_only": false
+        }
+      }
+    },
+    {
+      "name": "entry_realtime_position",
+      "payload": {
+        "success": true,
+        "result": {
+          "size": 1,
+          "entry_price": "77943.50000000"
+        }
+      }
+    },
+    {
+      "name": "orders_after_entry",
+      "payload": {
+        "success": true,
+        "result": [
+          {
+            "limit_price": null,
+            "bracket_order": true,
+            "product_symbol": "BTCUSD",
+            "bracket_take_profit_price": null,
+            "bracket_stop_loss_limit_price": null,
+            "updated_at": "2026-11-01T11:43:59.809833Z",
+            "bracket_trail_amount": null,
+            "average_fill_price": null,
+            "size": 1,
+            "order_type": "market_order",
+            "stop_order_type": "take_profit_order",
+            "created_at": "2026-11-01T11:43:59.613070Z",
+            "trail_amount": null,
+            "unfilled_size": 1,
+            "cancellation_reason": null,
+            "bracket_take_profit_limit_price": null,
+            "time_in_force": "gtc",
+            "id": 710000003,
+            "commission": "0",
+            "paid_commission": "0",
+            "client_order_id": null,
+            "stop_price": "79502.4",
+            "stop_trigger_method": "last_traded_price",
+            "state": "pending",
+            "bracket_stop_loss_price": null,
+            "side": "sell",
+            "product_id": 84,
+            "reduce_only": true
+          },
+          {
+            "limit_price": null,
+            "bracket_order": true,
+            "product_symbol": "BTCUSD",
+            "bracket_take_profit_price": null,
+            "bracket_stop_loss_limit_price": null,
+            "updated_at": "2026-11-01T11:43:59.766745Z",
+            "bracket_trail_amount": null,
+            "average_fill_price": null,
+            "size": 1,
+            "order_type": "market_order",
+            "stop_order_type": "stop_loss_order",
+            "created_at": "2026-11-01T11:43:59.612522Z",
+            "trail_amount": null,
+            "unfilled_size": 1,
+            "cancellation_reason": null,
+            "bracket_take_profit_limit_price": null,
+            "time_in_force": "gtc",
+            "id": 710000002,
+            "commission": "0",
+            "paid_commission": "0",
+            "client_order_id": null,
+            "stop_price": "76380.7",
+            "stop_trigger_method": "last_traded_price",
+            "state": "pending",
+            "bracket_stop_loss_price": null,
+            "side": "sell",
+            "product_id": 84,
+            "reduce_only": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "protective_stop_lookup",
+      "payload": {
+        "success": true,
+        "result": {
+          "limit_price": null,
+          "bracket_order": true,
+          "product_symbol": "BTCUSD",
+          "bracket_take_profit_price": null,
+          "bracket_stop_loss_limit_price": null,
+          "updated_at": "2026-11-01T11:43:59.766745Z",
+          "bracket_trail_amount": null,
+          "average_fill_price": null,
+          "size": 1,
+          "order_type": "market_order",
+          "stop_order_type": "stop_loss_order",
+          "created_at": "2026-11-01T11:43:59.612522Z",
+          "trail_amount": null,
+          "unfilled_size": 1,
+          "cancellation_reason": null,
+          "bracket_take_profit_limit_price": null,
+          "time_in_force": "gtc",
+          "id": 710000002,
+          "commission": "0",
+          "paid_commission": "0",
+          "client_order_id": null,
+          "stop_price": "76380.7",
+          "stop_trigger_method": "last_traded_price",
+          "state": "pending",
+          "bracket_stop_loss_price": null,
+          "side": "sell",
+          "product_id": 84,
+          "reduce_only": true
+        }
+      }
+    },
+    {
+      "name": "orders_after_entry",
+      "payload": {
+        "success": true,
+        "result": [
+          {
+            "limit_price": null,
+            "bracket_order": true,
+            "product_symbol": "BTCUSD",
+            "bracket_take_profit_price": null,
+            "bracket_stop_loss_limit_price": null,
+            "updated_at": "2026-11-01T11:43:59.809833Z",
+            "bracket_trail_amount": null,
+            "average_fill_price": null,
+            "size": 1,
+            "order_type": "market_order",
+            "stop_order_type": "take_profit_order",
+            "created_at": "2026-11-01T11:43:59.613070Z",
+            "trail_amount": null,
+            "unfilled_size": 1,
+            "cancellation_reason": null,
+            "bracket_take_profit_limit_price": null,
+            "time_in_force": "gtc",
+            "id": 710000003,
+            "commission": "0",
+            "paid_commission": "0",
+            "client_order_id": null,
+            "stop_price": "79502.4",
+            "stop_trigger_method": "last_traded_price",
+            "state": "pending",
+            "bracket_stop_loss_price": null,
+            "side": "sell",
+            "product_id": 84,
+            "reduce_only": true
+          },
+          {
+            "limit_price": null,
+            "bracket_order": true,
+            "product_symbol": "BTCUSD",
+            "bracket_take_profit_price": null,
+            "bracket_stop_loss_limit_price": null,
+            "updated_at": "2026-11-01T11:43:59.766745Z",
+            "bracket_trail_amount": null,
+            "average_fill_price": null,
+            "size": 1,
+            "order_type": "market_order",
+            "stop_order_type": "stop_loss_order",
+            "created_at": "2026-11-01T11:43:59.612522Z",
+            "trail_amount": null,
+            "unfilled_size": 1,
+            "cancellation_reason": null,
+            "bracket_take_profit_limit_price": null,
+            "time_in_force": "gtc",
+            "id": 710000002,
+            "commission": "0",
+            "paid_commission": "0",
+            "client_order_id": null,
+            "stop_price": "76380.7",
+            "stop_trigger_method": "last_traded_price",
+            "state": "pending",
+            "bracket_stop_loss_price": null,
+            "side": "sell",
+            "product_id": 84,
+            "reduce_only": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "protective_stop_lookup",
+      "payload": {
+        "success": true,
+        "result": {
+          "limit_price": null,
+          "bracket_order": true,
+          "product_symbol": "BTCUSD",
+          "bracket_take_profit_price": null,
+          "bracket_stop_loss_limit_price": null,
+          "updated_at": "2026-11-01T11:43:59.766745Z",
+          "bracket_trail_amount": null,
+          "average_fill_price": null,
+          "size": 1,
+          "order_type": "market_order",
+          "stop_order_type": "stop_loss_order",
+          "created_at": "2026-11-01T11:43:59.612522Z",
+          "trail_amount": null,
+          "unfilled_size": 1,
+          "cancellation_reason": null,
+          "bracket_take_profit_limit_price": null,
+          "time_in_force": "gtc",
+          "id": 710000002,
+          "commission": "0",
+          "paid_commission": "0",
+          "client_order_id": null,
+          "stop_price": "76380.7",
+          "stop_trigger_method": "last_traded_price",
+          "state": "pending",
+          "bracket_stop_loss_price": null,
+          "side": "sell",
+          "product_id": 84,
+          "reduce_only": true
+        }
+      }
+    },
+    {
+      "name": "entry_lookup",
+      "payload": {
+        "success": true,
+        "result": {
+          "product_symbol": "BTCUSD",
+          "average_fill_price": "77943.5",
+          "stop_trigger_method": null,
+          "updated_at": "2026-11-01T11:43:59.628970Z",
+          "stop_price": null,
+          "bracket_stop_loss_limit_price": null,
+          "bracket_take_profit_limit_price": null,
+          "unfilled_size": 0,
+          "bracket_stop_loss_price": "76380.7",
+          "product_id": 84,
+          "size": 1,
+          "paid_commission": "0.04598667",
+          "trail_amount": null,
+          "reduce_only": false,
+          "time_in_force": "ioc",
+          "side": "buy",
+          "bracket_trail_amount": null,
+          "cancellation_reason": null,
+          "created_at": "2026-11-01T11:43:59.477636Z",
+          "stop_order_type": null,
+          "id": 710000001,
+          "bracket_take_profit_price": "79502.4",
+          "limit_price": "78021.5",
+          "state": "closed",
+          "order_type": "limit_order",
+          "commission": "0",
+          "client_order_id": "fixture_fill_1",
+          "bracket_order": null
+        }
+      }
+    },
+    {
+      "name": "entry_rest_fills",
+      "payload": {
+        "success": true,
+        "result": [
+          {
+            "id": 710000004,
+            "size": "1",
+            "role": "taker",
+            "created_at": "2026-11-01T11:43:59.617864Z",
+            "product_id": 84,
+            "side": "buy",
+            "price": "77943.5",
+            "product_symbol": "BTCUSD",
+            "commission": "0.04598667",
+            "notional": "77.9435",
+            "order_id": 710000001
+          }
+        ]
+      }
+    },
+    {
+      "name": "close_request",
+      "payload": {
+        "product_id": 84,
+        "size": 1,
+        "side": "sell",
+        "order_type": "market_order",
+        "reduce_only": true,
+        "client_order_id": "fixture_fill_2"
+      }
+    },
+    {
+      "name": "ws_orders",
+      "payload": {
+        "limit_price": "0.1",
+        "bracket_order": null,
+        "product_symbol": "BTCUSD",
+        "reason": null,
+        "bracket_take_profit_price": null,
+        "bracket_stop_loss_limit_price": null,
+        "updated_at": "2026-11-01T11:44:03.300771Z",
+        "bracket_trail_amount": null,
+        "average_fill_price": null,
+        "size": 1,
+        "symbol": "BTCUSD",
+        "order_type": "market_order",
+        "stop_order_type": null,
+        "created_at": "2026-11-01T11:44:03.300771Z",
+        "trail_amount": null,
+        "unfilled_size": 1,
+        "timestamp": 1793533443302328,
+        "cancellation_reason": null,
+        "bracket_take_profit_limit_price": null,
+        "time_in_force": "ioc",
+        "id": 710000005,
+        "commission": "0",
+        "paid_commission": "0",
+        "client_order_id": "fixture_fill_2",
+        "seq_no": 7,
+        "stop_price": null,
+        "stop_trigger_method": null,
+        "state": "open",
+        "bracket_stop_loss_price": null,
+        "type": "orders",
+        "side": "sell",
+        "product_id": 84,
+        "reduce_only": true,
+        "action": "create"
+      }
+    },
+    {
+      "name": "ws_positions",
+      "payload": {
+        "reason": null,
+        "size": 1,
+        "timestamp": 1793533443302430,
+        "type": "positions",
+        "action": "update",
+        "symbol": "BTCUSD",
+        "entry_price": "77943.5",
+        "product_symbol": "BTCUSD",
+        "product_id": 84,
+        "commission": "0.045986665"
+      }
+    },
+    {
+      "name": "close_ack",
+      "payload": {
+        "meta": {},
+        "success": true,
+        "result": {
+          "limit_price": "0.1",
+          "bracket_order": null,
+          "product_symbol": "BTCUSD",
+          "bracket_take_profit_price": null,
+          "bracket_stop_loss_limit_price": null,
+          "updated_at": "2026-11-01T11:44:03.315855Z",
+          "bracket_trail_amount": null,
+          "average_fill_price": "77939.5",
+          "size": 1,
+          "order_type": "market_order",
+          "stop_order_type": null,
+          "created_at": "2026-11-01T11:44:03.300771Z",
+          "trail_amount": null,
+          "unfilled_size": 0,
+          "cancellation_reason": null,
+          "bracket_take_profit_limit_price": null,
+          "time_in_force": "ioc",
+          "id": 710000005,
+          "commission": "0",
+          "paid_commission": "0.04598431",
+          "client_order_id": "fixture_fill_2",
+          "stop_price": null,
+          "stop_trigger_method": null,
+          "state": "closed",
+          "bracket_stop_loss_price": null,
+          "side": "sell",
+          "product_id": 84,
+          "reduce_only": true
+        }
+      }
+    },
+    {
+      "name": "ws_positions",
+      "payload": {
+        "reason": null,
+        "size": 0,
+        "timestamp": 1793533443407849,
+        "type": "positions",
+        "action": "delete",
+        "symbol": "BTCUSD",
+        "entry_price": "77943.5",
+        "product_symbol": "BTCUSD",
+        "product_id": 84,
+        "commission": "0"
+      }
+    },
+    {
+      "name": "ws_orders",
+      "payload": {
+        "timestamp": 1793533443364307,
+        "stop_trigger_method": null,
+        "product_symbol": "BTCUSD",
+        "bracket_stop_loss_price": null,
+        "id": 710000005,
+        "commission": "0",
+        "type": "orders",
+        "bracket_take_profit_limit_price": null,
+        "bracket_order": null,
+        "side": "sell",
+        "limit_price": "0.1",
+        "cancellation_reason": null,
+        "updated_at": "2026-11-01T11:44:03.300771Z",
+        "created_at": "2026-11-01T11:44:03.300771Z",
+        "action": "delete",
+        "seq_no": 8,
+        "fill_id": 710000006,
+        "stop_order_type": null,
+        "symbol": "BTCUSD",
+        "stop_price": null,
+        "client_order_id": "fixture_fill_2",
+        "average_fill_price": "77939.5",
+        "bracket_trail_amount": null,
+        "bracket_take_profit_price": null,
+        "trail_amount": null,
+        "reduce_only": true,
+        "size": 1,
+        "bracket_stop_loss_limit_price": null,
+        "product_id": 84,
+        "paid_commission": "0.04598431",
+        "reason": "fill",
+        "order_type": "market_order",
+        "time_in_force": "ioc",
+        "unfilled_size": 0,
+        "state": "closed"
+      }
+    },
+    {
+      "name": "ws_orders",
+      "payload": {
+        "limit_price": null,
+        "bracket_order": true,
+        "product_symbol": "BTCUSD",
+        "reason": "stop_cancel",
+        "bracket_take_profit_price": null,
+        "bracket_stop_loss_limit_price": null,
+        "updated_at": "2026-11-01T11:44:03.364689Z",
+        "bracket_trail_amount": null,
+        "average_fill_price": null,
+        "size": 1,
+        "symbol": "BTCUSD",
+        "order_type": "market_order",
+        "stop_order_type": "stop_loss_order",
+        "created_at": "2026-11-01T11:43:59.612522Z",
+        "trail_amount": null,
+        "unfilled_size": 1,
+        "timestamp": 1793533443408427,
+        "cancellation_reason": "position_closed",
+        "bracket_take_profit_limit_price": null,
+        "time_in_force": "gtc",
+        "id": 710000002,
+        "commission": "0",
+        "paid_commission": "0",
+        "client_order_id": null,
+        "seq_no": 9,
+        "stop_price": "76380.7",
+        "stop_trigger_method": "last_traded_price",
+        "state": "cancelled",
+        "bracket_stop_loss_price": null,
+        "type": "orders",
+        "side": "sell",
+        "product_id": 84,
+        "reduce_only": true,
+        "action": "delete"
+      }
+    },
+    {
+      "name": "ws_orders",
+      "payload": {
+        "limit_price": null,
+        "bracket_order": true,
+        "product_symbol": "BTCUSD",
+        "reason": "stop_cancel",
+        "bracket_take_profit_price": null,
+        "bracket_stop_loss_limit_price": null,
+        "updated_at": "2026-11-01T11:44:03.405922Z",
+        "bracket_trail_amount": null,
+        "average_fill_price": null,
+        "size": 1,
+        "symbol": "BTCUSD",
+        "order_type": "market_order",
+        "stop_order_type": "take_profit_order",
+        "created_at": "2026-11-01T11:43:59.613070Z",
+        "trail_amount": null,
+        "unfilled_size": 1,
+        "timestamp": 1793533443408507,
+        "cancellation_reason": "position_closed",
+        "bracket_take_profit_limit_price": null,
+        "time_in_force": "gtc",
+        "id": 710000003,
+        "commission": "0",
+        "paid_commission": "0",
+        "client_order_id": null,
+        "seq_no": 10,
+        "stop_price": "79502.4",
+        "stop_trigger_method": "last_traded_price",
+        "state": "cancelled",
+        "bracket_stop_loss_price": null,
+        "type": "orders",
+        "side": "sell",
+        "product_id": 84,
+        "reduce_only": true,
+        "action": "delete"
+      }
+    },
+    {
+      "name": "ws_user_trades",
+      "payload": {
+        "reason": "normal",
+        "size": 1,
+        "timestamp": 1793533443303815,
+        "type": "user_trades",
+        "action": "fill",
+        "symbol": "BTCUSD",
+        "role": "taker",
+        "side": "sell",
+        "price": "77939.5",
+        "product_id": 84,
+        "post_only": false,
+        "client_order_id": "fixture_fill_2",
+        "commission": "0.04598431",
+        "order_id": 710000005,
+        "seq_no": 2,
+        "fill_id": 710000006
+      }
+    },
+    {
+      "name": "cleanup_close_lookup",
+      "payload": {
+        "success": true,
+        "result": {
+          "limit_price": "0.1",
+          "bracket_order": null,
+          "product_symbol": "BTCUSD",
+          "bracket_take_profit_price": null,
+          "bracket_stop_loss_limit_price": null,
+          "updated_at": "2026-11-01T11:44:03.315855Z",
+          "bracket_trail_amount": null,
+          "average_fill_price": "77939.5",
+          "size": 1,
+          "order_type": "market_order",
+          "stop_order_type": null,
+          "created_at": "2026-11-01T11:44:03.300771Z",
+          "trail_amount": null,
+          "unfilled_size": 0,
+          "cancellation_reason": null,
+          "bracket_take_profit_limit_price": null,
+          "time_in_force": "ioc",
+          "id": 710000005,
+          "commission": "0",
+          "paid_commission": "0.04598431",
+          "client_order_id": "fixture_fill_2",
+          "stop_price": null,
+          "stop_trigger_method": null,
+          "state": "closed",
+          "bracket_stop_loss_price": null,
+          "side": "sell",
+          "product_id": 84,
+          "reduce_only": true
+        }
+      }
+    },
+    {
+      "name": "cleanup_entry_lookup",
+      "payload": {
+        "success": true,
+        "result": {
+          "product_symbol": "BTCUSD",
+          "average_fill_price": "77943.5",
+          "stop_trigger_method": null,
+          "updated_at": "2026-11-01T11:43:59.628970Z",
+          "stop_price": null,
+          "bracket_stop_loss_limit_price": null,
+          "bracket_take_profit_limit_price": null,
+          "unfilled_size": 0,
+          "bracket_stop_loss_price": "76380.7",
+          "product_id": 84,
+          "size": 1,
+          "paid_commission": "0.04598667",
+          "trail_amount": null,
+          "reduce_only": false,
+          "time_in_force": "ioc",
+          "side": "buy",
+          "bracket_trail_amount": null,
+          "cancellation_reason": null,
+          "created_at": "2026-11-01T11:43:59.477636Z",
+          "stop_order_type": null,
+          "id": 710000001,
+          "bracket_take_profit_price": "79502.4",
+          "limit_price": "78021.5",
+          "state": "closed",
+          "order_type": "limit_order",
+          "commission": "0",
+          "client_order_id": "fixture_fill_1",
+          "bracket_order": null
+        }
+      }
+    },
+    {
+      "name": "final_open_orders",
+      "payload": {
+        "meta": {},
+        "success": true,
+        "result": []
+      }
+    },
+    {
+      "name": "final_margined_positions",
+      "payload": {
+        "success": true,
+        "result": []
+      }
+    },
+    {
+      "name": "final_realtime_position",
+      "payload": {
+        "success": true,
+        "result": {
+          "size": 0,
+          "entry_price": null
+        }
+      }
+    },
+    {
+      "name": "close_final_lookup",
+      "payload": {
+        "success": true,
+        "result": {
+          "limit_price": "0.1",
+          "bracket_order": null,
+          "product_symbol": "BTCUSD",
+          "bracket_take_profit_price": null,
+          "bracket_stop_loss_limit_price": null,
+          "updated_at": "2026-11-01T11:44:03.315855Z",
+          "bracket_trail_amount": null,
+          "average_fill_price": "77939.5",
+          "size": 1,
+          "order_type": "market_order",
+          "stop_order_type": null,
+          "created_at": "2026-11-01T11:44:03.300771Z",
+          "trail_amount": null,
+          "unfilled_size": 0,
+          "cancellation_reason": null,
+          "bracket_take_profit_limit_price": null,
+          "time_in_force": "ioc",
+          "id": 710000005,
+          "commission": "0",
+          "paid_commission": "0.04598431",
+          "client_order_id": "fixture_fill_2",
+          "stop_price": null,
+          "stop_trigger_method": null,
+          "state": "closed",
+          "bracket_stop_loss_price": null,
+          "side": "sell",
+          "product_id": 84,
+          "reduce_only": true
+        }
+      }
+    },
+    {
+      "name": "close_lookup",
+      "payload": {
+        "success": true,
+        "result": {
+          "limit_price": "0.1",
+          "bracket_order": null,
+          "product_symbol": "BTCUSD",
+          "bracket_take_profit_price": null,
+          "bracket_stop_loss_limit_price": null,
+          "updated_at": "2026-11-01T11:44:03.315855Z",
+          "bracket_trail_amount": null,
+          "average_fill_price": "77939.5",
+          "size": 1,
+          "order_type": "market_order",
+          "stop_order_type": null,
+          "created_at": "2026-11-01T11:44:03.300771Z",
+          "trail_amount": null,
+          "unfilled_size": 0,
+          "cancellation_reason": null,
+          "bracket_take_profit_limit_price": null,
+          "time_in_force": "ioc",
+          "id": 710000005,
+          "commission": "0",
+          "paid_commission": "0.04598431",
+          "client_order_id": "fixture_fill_2",
+          "stop_price": null,
+          "stop_trigger_method": null,
+          "state": "closed",
+          "bracket_stop_loss_price": null,
+          "side": "sell",
+          "product_id": 84,
+          "reduce_only": true
+        }
+      }
+    },
+    {
+      "name": "close_rest_fills",
+      "payload": {
+        "success": true,
+        "result": [
+          {
+            "id": 710000006,
+            "size": "1",
+            "role": "taker",
+            "created_at": "2026-11-01T11:44:03.303815Z",
+            "product_id": 84,
+            "side": "sell",
+            "price": "77939.5",
+            "product_symbol": "BTCUSD",
+            "commission": "0.04598431",
+            "notional": "77.9395",
+            "order_id": 710000005
+          }
+        ]
+      }
+    }
+  ]
+}

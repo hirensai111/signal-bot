@@ -1,0 +1,26 @@
+{
+  "environment": "testnet",
+  "test": "read_only_recovery_of_observed_stop",
+  "result": "PASS",
+  "bot_status": {
+    "startup_state": "closed",
+    "startup_entry_qty": "1.0000000000000000",
+    "startup_protection": "not_required",
+    "reconciled_before_signals": true,
+    "ready": true,
+    "state": "closed",
+    "protection": "not_required",
+    "entry_qty": "1.0000000000000000",
+    "exit_qty": "1.0000000000000000",
+    "exit_purposes": [
+      "stop_loss"
+    ],
+    "fill_count": 2,
+    "outcomes": 1,
+    "trade_results": 1,
+    "exit_reason": "sl_hit",
+    "close_events": 1,
+    "mutation_attempts": 0,
+    "first_reconciliation_complete": true
+  }
+}

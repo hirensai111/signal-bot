@@ -45,6 +45,10 @@ async def test_missed_fill_is_adopted_from_venue(h):
     assert local.state == S.FILLED
     assert local.protective_status == "confirmed"
     assert {d["kind"] for d in h.reconciler.last_discrepancies} == {"missed_order_update"}
+    fills = await h.store.fills_for(local.client_order_id)
+    assert sum((f.qty for f in fills if f.purpose == "entry"), Decimal("0")) == local.filled_size
+    await h.reconciler.reconcile_now()
+    assert len(await h.store.fills_for(local.client_order_id)) == len(fills)
 
 
 async def test_missed_close_is_reconstructed(h):

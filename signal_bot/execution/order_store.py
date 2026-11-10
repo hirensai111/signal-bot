@@ -404,6 +404,41 @@ class OrderStore:
                     select(Order).where(Order.client_order_id == fill.client_order_id)
                 )
             purpose = classify_fill(fill, order)
+            existing = await session.get(Fill, fill.fill_id, with_for_update=True)
+            if existing is not None:
+                # A bracket-child stream fill can arrive without its parent
+                # client ID. REST recovery later supplies that association and
+                # the actual stop/TP purpose; it is enrichment, not a new fill.
+                same_execution = (
+                    existing.venue == venue
+                    and existing.symbol == fill.symbol
+                    and existing.side == fill.side
+                    and existing.qty == fill.qty
+                    and abs(existing.price - fill.price)
+                    <= max(abs(fill.price) * Decimal("1e-15"), Decimal("1e-16"))
+                )
+                if (
+                    same_execution
+                    and order is not None
+                    and (
+                        existing.order_id is None
+                        or existing.client_order_id == fill.client_order_id
+                    )
+                ):
+                    unowned = existing.order_id is None
+                    existing.order_id = order.id
+                    existing.client_order_id = fill.client_order_id
+                    if existing.purpose == str(FillPurpose.UNKNOWN):
+                        existing.purpose = str(purpose)
+                    if unowned:
+                        existing.fee = fill.fee
+                        if purpose == FillPurpose.ENTRY:
+                            order.fees = (order.fees or 0) + fill.fee
+                            sig = await session.get(Signal, order.signal_id)
+                            if sig is not None:
+                                sig.entry_fees_usdt = order.fees
+                    await session.commit()
+                return False
             session.add(
                 Fill(
                     fill_id=fill.fill_id,
@@ -429,6 +464,12 @@ class OrderStore:
                 await session.commit()
             except IntegrityError:
                 await session.rollback()
+                # A nameless stream fill may win the INSERT race against its
+                # associated REST backfill. Retry only the enrichment path once
+                # the exact primary key is known to exist; do not lose ownership.
+                if await session.get(Fill, fill.fill_id) is not None:
+                    await session.close()
+                    await self.record_fill(fill, venue)
                 logger.info("Duplicate fill %s ignored", fill.fill_id)
                 return False
         return True

@@ -492,6 +492,17 @@ class ExecutionEngine:
     async def _apply_update(
         self, update: ExchangeOrder, *, event_id: str | None = None, source: str = "stream"
     ) -> None:
+        if source == "stream" and update.filled_size > 0:
+            current = await self.store.get_by_client_id(update.client_order_id)
+            if (
+                current is not None
+                and current.state == S.RECONCILIATION_REQUIRED
+                and current.protective_status == "failed"
+            ):
+                # A delayed entry-fill update proves exposure, not that failed
+                # protection/flattening recovered. Keep the critical state until
+                # an explicit reconciliation pass verifies venue safety.
+                return
         if event_id is None:
             event_id = deterministic_event_id(
                 source,
