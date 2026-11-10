@@ -34,7 +34,7 @@ from signal_bot.config import settings
 from signal_bot.delta.client import ENDPOINTS
 
 BINANCE_REST = "https://fapi.binance.com"
-BINANCE_WS = "wss://fstream.binance.com/ws/btcusdt@kline_4h"
+BINANCE_WS = "wss://fstream.binance.com/market/ws/btcusdt@kline_4h"
 TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 

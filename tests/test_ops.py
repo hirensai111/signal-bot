@@ -3,8 +3,32 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import aiohttp
 
 from signal_bot.ops import preflight, soak
+
+
+async def test_preflight_receives_a_candle_from_the_current_market_route():
+    ws = MagicMock()
+    ws.receive = AsyncMock(
+        return_value=SimpleNamespace(
+            type=aiohttp.WSMsgType.TEXT, data=json.dumps({"e": "kline", "k": {"i": "4h"}})
+        )
+    )
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=ws)
+    context.__aexit__ = AsyncMock(return_value=False)
+    session = MagicMock()
+    session.ws_connect.return_value = context
+    check = await preflight.check_binance_ws(session)
+    assert check.status == "PASS"
+    session.ws_connect.assert_called_once_with(
+        "wss://fstream.binance.com/market/ws/btcusdt@kline_4h", heartbeat=10
+    )
 
 
 async def test_a_hanging_network_check_fails_instead_of_hanging():
