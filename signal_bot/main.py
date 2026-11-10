@@ -381,7 +381,8 @@ async def main() -> None:
                 ),
                 state_path=settings.paper_state_path,
             )
-            adapter.restore()
+            if adapter.restore():
+                await adapter.restore_ledger()
             mode = EXEC_MODE.PAPER
 
         governor = RiskGovernor(AsyncSessionLocal, exchange=adapter, telegram=telegram, bus=bus)
@@ -422,6 +423,15 @@ async def main() -> None:
         )
         engine.reconciler = reconciler
         position_view = PositionView(bus)
+        if isinstance(adapter, PaperBroker):
+            for position in await adapter.positions():
+                position_view.apply(
+                    Event.create(
+                        EventType.EXCHANGE_POSITION_UPDATE,
+                        position.to_payload(adapter.venue),
+                        adapter.venue,
+                    )
+                )
 
         # Subscribe every durable consumer, then replay history before any stream starts.
         replay = {}

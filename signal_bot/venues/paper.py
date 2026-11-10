@@ -28,9 +28,10 @@ from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from signal_bot.core.clock import SYSTEM_CLOCK, Clock
+from signal_bot.core.clock import SYSTEM_CLOCK, Clock, utc
 from signal_bot.db.models import PaperLedgerEntry
 from signal_bot.events.bus import EventBus
 from signal_bot.execution.adapter import (
@@ -43,7 +44,7 @@ from signal_bot.execution.adapter import (
     VenueOrderState,
 )
 from signal_bot.observability import metrics
-from signal_bot.venues.simulated import CostModel, SimulatedVenue, _Order, _Position
+from signal_bot.venues.simulated import CostModel, LedgerEntry, SimulatedVenue, _Order, _Position
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,29 @@ class PaperBroker(SimulatedVenue):
     async def checkpoint(self) -> None:
         await self._persist_ledger()
         self._save_state()
+
+    async def restore_ledger(self) -> None:
+        """Keep funding attribution and account totals after restoring a checkpoint."""
+        if self.session_factory is None:
+            return
+        async with self.session_factory() as session:
+            rows = (
+                await session.scalars(select(PaperLedgerEntry).order_by(PaperLedgerEntry.id))
+            ).all()
+        if rows:
+            self._ledger = [
+                LedgerEntry(
+                    row.entry_id,
+                    row.kind,
+                    row.symbol,
+                    row.amount,
+                    row.balance_after,
+                    row.reference,
+                    utc(row.occurred_at),
+                )
+                for row in rows
+            ]
+            self._persisted_ledger = len(self._ledger)
 
     async def _persist_ledger(self) -> None:
         if self.session_factory is None:

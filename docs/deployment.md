@@ -153,6 +153,39 @@ of memory.
 - Soak report for the second bot:
   `sudo docker compose exec bot-tp python -m signal_bot.ops.soak --prometheus http://prometheus:9090 --instance bot-tp:8080`
 
+**First launch with the main bot's existing positions.** Use this instead of
+the fresh-account startup above when comparing exits on matched entries. On the
+server, check out the approved release and run the fork with `tp` still disabled
+in `.env`:
+
+```bash
+cd /opt/signal-bot
+sudo bash deploy/fork-paper-tp.sh
+```
+
+The command builds and runs preflight before stopping the main bot to capture
+its database and paper checkpoint together. It imports the snapshot into the
+empty TP database and volume. The copy retains the entry fills, sizes, ledger,
+and time exits. The TP copy uses each original fixed stop and the +1.5R target
+derived from its original signal, then both bots start on the same image.
+
+Before either bot starts, the fork checks completed one-minute Delta trade
+candles after each original entry. If the first bracket touch is in that
+history, the TP copy records a simulated fill, trade result and ledger entries
+through the ordinary paper execution path. Funding after that simulated exit
+is removed from the TP copy. The replay uses candle extrema as price evidence,
+the end of the touch minute as the exit time, and the stop first if both levels
+were touched in the same minute. An ambiguous touch in the entry minute aborts
+the fork. The TP bot uses live books after startup.
+
+`backups/paper-fork-*/fork.json` records the handoff time, inherited levels and
+any historical fills. Use it to distinguish replayed outcomes from subsequent
+forward paper results. The command requires a fresh TP database and state volume.
+If it stops after importing data, retain the snapshot and investigate before
+launching the second bot. After a successful fork, add `tp` to
+`COMPOSE_PROFILES` in `.env` for future updates and expose port 8444 with the
+Tailscale command above.
+
 **Turn it off:** remove `COMPOSE_PROFILES=tp` from `.env` and run
 `sudo docker compose --profile tp stop bot-tp`. Its database and volume are kept.
 
