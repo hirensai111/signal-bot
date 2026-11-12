@@ -137,3 +137,14 @@ def test_portfolio_evaluation_is_deterministic(tmp_path):
         "not_validated",
     )
     assert summarize(run_portfolio(cfg, sets), 10_000)["trades"] == x["summary"]["trades"]
+
+
+def test_portfolio_criteria_are_json_booleans(tmp_path):
+    # numpy.bool_ would be written as the string "False" by json.dumps(default=str),
+    # and the string reads as true to anything that checks it by truthiness
+    cfg = cfg_with_universe(tmp_path, ["AAAUSDT", "BBBUSDT"])
+    sets = [data("AAAUSDT", 3, 6000), data("BBBUSDT", 4, 6000)]
+    x = evaluate_portfolio(cfg, sets, random_runs=2)
+    assert x["windows"], "need 90-day windows for the window criterion to be computed"
+    for c in json.loads(json.dumps(x, default=str))["criteria"]:
+        assert isinstance(c["passed"], bool), c

@@ -497,7 +497,8 @@ def evaluate_portfolio(
         },
         {
             "name": "At least 60% of 90-day windows non-negative",
-            "passed": bool(win) and sum(w["return_pct"] >= 0 for w in win) / len(win) >= 0.6,
+            # bool(): the comparison yields numpy.bool_, which json.dumps(default=str) writes as "False"
+            "passed": bool(win) and bool(sum(w["return_pct"] >= 0 for w in win) / len(win) >= 0.6),
         },
         {
             "name": "Still profitable at 1.5x costs",
