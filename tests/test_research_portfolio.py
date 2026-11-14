@@ -139,6 +139,53 @@ def test_portfolio_evaluation_is_deterministic(tmp_path):
     assert summarize(run_portfolio(cfg, sets), 10_000)["trades"] == x["summary"]["trades"]
 
 
+def test_portfolio_sees_trailing_stops_moved_with_the_decision_bar(tmp_path, monkeypatch):
+    # live: the trailing manager ratchets with bar t at its close, before the portfolio
+    # decides at that close; a stop one bar stale overstates open risk and refuses entries
+    import signal_bot.research.portfolio as P
+    from signal_bot.signals.trend import trail_stop
+
+    names = ["AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT"]
+    cfg = cfg_with_universe(tmp_path, names)
+    seen = []
+    real_admit = P.admit
+
+    def spy(state, cands, limits):
+        seen.append((cands[0].symbol, cands[0].ref.bar, state.positions))
+        return real_admit(state, cands, limits)
+
+    monkeypatch.setattr(P, "admit", spy)
+    cache: dict = {}
+    sets = [data(n, seed, 12000) for seed, n in enumerate(names, start=3)]
+    run = run_portfolio(cfg, sets, limits=LOOSE, _cache=cache)
+    frames = {k[1]: v[0] for k, v in cache.items() if k[0] == "frame"}
+    checked = moved = 0
+    for sym, bar, positions in seen:
+        now = frames[sym].index[bar]
+        for p in positions:
+            tr = next(
+                t
+                for t in run.trades
+                if t.filled
+                and t.symbol == p.symbol
+                and t.entry_time <= now
+                and (t.exit_time is None or t.exit_time > now)
+            )
+            bars = frames[p.symbol].loc[tr.entry_time : now]
+            ext = bars["high"] if p.side == "long" else bars["low"]
+            pick = max if p.side == "long" else min
+            want = trail_stop(p.side, tr.stop, pick(ext), tr.trail_distance)
+            assert p.stop == pytest.approx(want, rel=1e-12), (p.symbol, now)
+            one_bar_late = (
+                trail_stop(p.side, tr.stop, pick(ext.iloc[:-1]), tr.trail_distance)
+                if len(ext) > 1
+                else tr.stop
+            )
+            checked += 1
+            moved += want != one_bar_late
+    assert checked >= 10 and moved >= 1, (checked, moved)  # the decision bar moved stops
+
+
 def test_portfolio_criteria_are_json_booleans(tmp_path):
     # numpy.bool_ would be written as the string "False" by json.dumps(default=str),
     # and the string reads as true to anything that checks it by truthiness

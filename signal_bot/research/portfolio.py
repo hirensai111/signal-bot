@@ -17,9 +17,9 @@ timeline and, at every bar close, applies exactly what live trading applies:
   listed it.
 
 Order of operations at each bar close *t*, identical to the live pipeline:
-open positions are stepped through bar *t* (exits, trail ratchet, time stops),
-equity is marked to the close, then that bar's decisions are ranked and
-admitted, and accepted trades enter at the next bar's open.
+open positions are stepped through bar *t* (exits, time stops) and trailing stops
+are ratcheted with bar *t*'s extreme, equity is marked to the close, then that bar's
+decisions are ranked and admitted, and accepted trades enter at the next bar's open.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ from signal_bot.risk.portfolio import (
     correlations_from_returns,
     log_returns,
 )
-from signal_bot.signals.trend import TrendParams, atr, trend_decisions
+from signal_bot.signals.trend import TrendParams, atr, trail_stop, trend_decisions
 
 UNIVERSE_FILE = Path(__file__).with_name("delta_universe.json")
 
@@ -147,6 +147,18 @@ class _Decision:
     strength: float
     max_hold_bars: int
     take_profit: float | None = None
+
+
+def _ratchet_at_close(ot: OpenTrade, bars: _Bars, k: int) -> None:
+    """Move a trailing stop with bar *k* at its close, as the live trailing manager does.
+
+    ``step_trade`` applies bar *k*'s extreme only when it steps bar *k+1*, which gives the
+    same exits but leaves the stop one bar stale while the portfolio decides at the close of
+    *k*: open and correlated risk were overstated and entries live would take were refused.
+    Ratcheting here first is idempotent with that later update (``trail_stop`` never loosens).
+    """
+    ot.best = max(ot.best, bars.h[k]) if ot.long else min(ot.best, bars.lo[k])
+    ot.stop = trail_stop(ot.intent.side, ot.stop, ot.best, ot.intent.trail_distance)
 
 
 def run_portfolio(
@@ -237,6 +249,8 @@ def run_portfolio(
                     last_loss_at = t + bar  # known at this bar's close
                 else:
                     loss_streak = 0
+            elif ot.intent.trail_distance:
+                _ratchet_at_close(ot, s.bars, k)
         if not live:
             continue
         # 2. mark to market at the close of t
