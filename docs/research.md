@@ -274,19 +274,19 @@ Eleven single-symbol backtests, each with its own $10k and every signal taken, a
 | Drawdown | Risk halved at 10% from the equity peak; entries stop at 20% (governor breaker `portfolio_drawdown`) | Aggregate loss control |
 | Universe | Delta India perpetuals as listed (`research/delta_universe.json`), tradable only from each listing date | Delta listed BTC on 2023-12-18 and the others in April 2024 |
 
-The limits gate **new** entries. Open risk is measured from the current price to the current stop, and a 3 ATR trail on a winner can sit further from the price than the 2 ATR initial stop. Open risk therefore drifts above the entry limits as winners run: up to 5.6% (development) and 6.9% (holdout). No position is cut to bring it back, because that would be a different strategy.
+The limits gate **new** entries. Open risk is measured from the current price to the current stop, and a 3 ATR trail on a winner can sit further from the price than the 2 ATR initial stop. Open risk can therefore drift above the entry limits as winners run. Measured with the stop the live bot actually holds at each close, it peaked at 3.2% (development) and 3.0% (holdout). No position is cut to bring it back, because that would be a different strategy. (The 5.6% and 6.9% first reported here came from the stop-timing error described under *Correction* below.)
 
 In trend mode the 2.0 governor defaults are derived from these rules instead of being taken from the sweep era: 6 positions, -6R per day, 18 trades per day, a kill switch after 15 consecutive losses. The 2.0 defaults were 3 positions, -3R and 5 losses. A trend strategy that wins about 37% of trades loses five in a row routinely, so the 2.0 settings would have halted it repeatedly and capped it at 3 positions. Values an operator sets explicitly are kept when stricter.
 
 ### Portfolio results
 
-Each run uses the same frozen signal and the same pre-registered rules (commit `1653067`, config hash `875c250051698836`). The first two runs below cover the development period (2021-01..2025-09). The third is the holdout year: it is the third look at that year and the first at the portfolio level.
+Each run uses the same frozen signal and the same pre-registered rules (config hash `875c250051698836`). The figures below were regenerated at commit `bcbaaa0`, after the stop-timing correction. The first two runs cover the development period (2021-01..2025-09). The third is the holdout year: it was first run at the portfolio level as look 3, and this regeneration is logged as look 4.
 
 | Run | Trading period | Return | Max drawdown | Trades | R per trade (95% CI) | 90-day windows >= 0 | Random percentile | 11 backtests summed onto one account |
 |---|---|---|---|---|---|---|---|---|
-| Development, Delta listing dates | 2023-12-18..2025-09 | +25.1% (13.4%/yr, Sharpe 0.92) | -10.3% | 353 | +0.15 (-0.00 to +0.30) | 57% | 92 | +37.4% from 599 trades |
-| Development, every coin treated as listed since 2021 | 2021-01..2025-09 | +22.3% (4.3%/yr, Sharpe 0.39) | -18.7%, 1048-day drawdown | 1170 | +0.08 (0.00 to +0.17) | 53% | 94 | +64.9% from 1762 trades |
-| **Holdout** | 2025-10..2026-09 | **+3.4%** (Sharpe 0.24) | **-16.4%**, 313-day drawdown | 250 | +0.06 (-0.14 to +0.25) | 2 of 4 | 84 | +19.6% from 381 trades |
+| Development, Delta listing dates | 2023-12-18..2025-09 | +38.0% (19.8%/yr, Sharpe 1.22) | -8.1% | 380 | +0.19 (+0.03 to +0.34) | 71% (5 of 7) | 94 | +37.4% from 599 trades |
+| Development, every coin treated as listed since 2021 | 2021-01..2025-09 | +53.6% (9.5%/yr, Sharpe 0.68) | -16.7%, 790-day drawdown | 1199 | +0.11 (+0.03 to +0.20) | 63% | 100 | +64.9% from 1762 trades |
+| **Holdout** | 2025-10..2026-09 | **+14.8%** (Sharpe 0.90) | **-16.6%**, 237-day drawdown | 261 | +0.16 (-0.05 to +0.36) | 3 of 4 | 98 | +19.6% from 381 trades |
 
 * "Random percentile" is the share of 50 random-entry portfolios beaten. Those portfolios use the same portfolio rules, symbols, trade counts and ATR stop and trail geometry.
 * "11 backtests summed onto one account" is what treating the per-coin results as one portfolio would claim.
@@ -301,18 +301,32 @@ What it shows:
 
 * **Shared capital changes the answer.**
   * The holdout's per-coin results (+0.10R per trade across 11 coins, 7 profitable) summed to +19.6% on one account.
-  * Executed as one account the year made +3.4%, with a -16.4% drawdown that lasted most of the year.
-  * Breakouts arrive together: about 40% of decision bars had two or more candidates, up to 10. They are also correlated, so the correlation cap refused the most entries (134 in the holdout).
-* **Not validated.** Every run fails two criteria: at least 60% of 90-day windows non-negative, and beating 95% of random-entry portfolios.
-* **What it does have.**
-  * Expectancy has stayed positive in every run, but its interval includes zero.
-  * It beat 84-94% of random portfolios.
-  * With listing dates respected it still made money at 3x costs on development data. The holdout broke even between 2x and 3x costs (+1.7% at 2x, -0.5% at 3x).
+  * Executed as one account the year made +14.8%, with a -16.6% drawdown that lasted 237 days.
+  * Breakouts arrive together: 43% of decision bars in the holdout had two or more candidates. They are also correlated, so the correlation cap refused the most entries (141 in the holdout).
+* **Criteria.**
+  * The holdout and the all-coins development run pass all six criteria (`validated_candidate`).
+  * The development run with Delta listing dates fails one: it beat 94% of random-entry portfolios, not 95%.
+* **Why that is weaker than it sounds.**
+  * The holdout is no longer clean. Besides the logged looks, the exit-variant study below and later forward-test questions were all evaluated on this year.
+  * The holdout's expectancy interval still includes zero (-0.05 to +0.36R).
+  * The correction that produced these numbers moved results a lot through a few dozen extra entries. That shows how sensitive a portfolio of this size is to which trades get through.
+* **Costs.** With listing dates respected it still made +19.0% at 3x costs on development data. The holdout made +12.7% at 2x and +10.5% at 3x. The all-coins run turned negative at 3x (-10.4%).
 * **Two issues in my own first report.** Both were found and fixed before the final runs, and the superseded log entries are kept.
   * Windows and annual figures included 2021-2023, before Delta listed anything, which counted the flat curve as "non-negative" windows.
   * The independent-backtest comparison ignored listing dates.
 
-Forward paper trading is now the only clean test left. The trend portfolio is the default `STRATEGY_CONFIG` for exactly that; nothing here supports live trading.
+#### Correction (14 November 2026): trailing-stop timing
+
+The first portfolio reports (log entries of 2 November) were too pessimistic for the trailing-stop exit.
+
+* **Live:** the trailing manager moves the stop with bar *t* at its close, before the portfolio decides on that close's breakouts.
+* **The simulator:** it applied bar *t*'s extreme only when it stepped bar *t+1*. Exits were identical, but every portfolio decision saw each trailing stop one bar stale. Open and correlated risk were overstated, and entries the live bot would take were refused.
+* **Found by:** replaying the first forward-test days against the paper bot's decisions. Fixed in `bcbaaa0` (`research/portfolio.py`, `_ratchet_at_close`), with a test that pins the stop each decision sees.
+* **Before the fix** the three runs read +25.1% / +22.3% / +3.4% (353 / 1170 / 250 trades), and none passed the 90-day-window or random-portfolio criteria.
+* **What it affects:** the trailing exits only. The fixed-stop +1.5R exit (variant C below, the second paper bot) is unaffected.
+* The superseded log entries are kept.
+
+Forward paper trading is still the only clean test left. The trend portfolio is the default `STRATEGY_CONFIG` for exactly that; nothing here supports live trading.
 
 ### Exit variants (November 2026, after the holdout)
 
@@ -323,23 +337,26 @@ fourth look at it and none of these figures is out-of-sample.
 
 | Exit | 2021-01..2025-09 (all coins) | Development, Delta listing dates | Holdout 2025-10..2026-09 |
 |---|---|---|---|
-| A. 3 ATR trailing stop, no target (0.2.0) | +4.3%/yr, max DD -18.7%, 1170 trades, 37% wins | +13.4%/yr, -10.3% | +3.4%, -16.4% |
-| B. Target +1.5R, trailing until then | +7.9%/yr, -14.5%, 1489 trades, 38% | +16.2%/yr, -9.0% | +6.1%, -16.9% |
-| **C. Target +1.5R, fixed 2 ATR stop, no trailing** | **+9.1%/yr, -15.8%, 1390 trades, 45%** | **+18.6%/yr, -9.8%** | **+4.5%, -17.4%** |
-| D. Target +3R, trailing until then | +1.3%/yr, -17.6%, 1313 trades, 36% | +9.0%/yr, -9.3% | +5.5%, -16.7% |
+| **A. 3 ATR trailing stop, no target (0.2.0)** | **+9.5%/yr, max DD -16.7%, 1199 trades, 38% wins** | **+19.8%/yr, -8.1%** | **+14.8%, -16.6%** |
+| B. Target +1.5R, trailing until then | +7.6%/yr, -15.0%, 1524 trades, 38% | +16.4%/yr, -10.3% | +6.2%, -17.6% |
+| C. Target +1.5R, fixed 2 ATR stop, no trailing | +9.1%/yr, -15.8%, 1390 trades, 45% | +18.6%/yr, -9.8% | +4.5%, -17.4% |
+| D. Target +3R, trailing until then | +3.9%/yr, -17.3%, 1355 trades, 37% | +13.3%/yr, -7.8% | +17.2%, -17.1% |
+
+A, B and D were recomputed after the stop-timing correction (`bcbaaa0`); C has no trail
+and is unchanged. Before the correction the table read A +4.3%/yr, +13.4%/yr, +3.4% and
+B +7.9%/yr, +16.2%/yr, +6.1%, which made a +1.5R target look better in every period.
 
 What it shows:
 
-* **A +1.5R target beat the trailing-only exit in every period** (B and C), with similar
-  or smaller drawdowns. Per trade, B averages less than A (+0.069R vs +0.084R); the gain
-  comes from trades closing sooner (1.5-2.0 days vs 2.2), which frees position slots for
-  breakouts the portfolio rules otherwise refuse, and from banking moves that reach
-  +1.5R and then reverse.
-* **B and C swap places** across periods; neither is clearly better. C is simpler (no
-  stop amendments) and won on the two development views.
-* **+3R is the worst of both:** rarely reached, and it still cuts the big trends.
+* **The trailing-only exit (A) is level with or ahead of every alternative** on both
+  development views. Against C the gap is small (+9.5% vs +9.1%/yr, +19.8% vs +18.6%/yr)
+  and within noise. In the holdout A is far ahead of C (+14.8% vs +4.5%).
+* **The earlier finding was mostly the timing error.** A trailing stop one bar stale made
+  open risk look higher, so the portfolio refused entries; exits that close sooner (B, C)
+  freed slots and hid the cost. With the correction, B is worse than A everywhere.
+* **+3R (D) is mixed:** weakest on development data, best in the holdout year.
 
-Because these numbers come from data already seen, variant C is not promoted. It runs as
+Because these numbers come from data already seen, no variant is promoted. C runs as
 a **second paper bot** next to the unchanged 0.2.0 exit
 (`strategies/trend_portfolio_tp15.toml`, `take_profit_r = 1.5`, `trail_atr = 0`;
 docs/deployment.md, *Second paper bot*), so the forward test compares them on the same
