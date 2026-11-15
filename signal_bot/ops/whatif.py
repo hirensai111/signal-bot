@@ -322,10 +322,24 @@ async def main() -> None:
             state = PortfolioState(equity, peak3, positions, corr, streak, last_loss, t)
             if state.loss_pause_until(limits) is not None:
                 pauses.append((t, streak, state.loss_pause_until(limits)))
+            # Live rule outside admit(): no new entry in a symbol that held a position at
+            # any time during this bar, even one that has just closed (trend_live.decide).
+            busy = {
+                tr.symbol
+                for tr in book
+                if tr.opened < t and (tr.closed is None or tr.closed > t - STEP)
+            }
             cands = []
             for sig in batch:
                 spec = universe.get(sig.symbol)
                 if spec is None:
+                    continue
+                if sig.symbol in busy:
+                    if taken_here(sig) and (tr := real_trade(sig)) is not None:
+                        dropped.append(tr)
+                        decisions.append(
+                            {"bar": t, "trade": tr, "refused_for": "symbol_busy_this_bar"}
+                        )
                     continue
                 cands.append(
                     Candidate(
