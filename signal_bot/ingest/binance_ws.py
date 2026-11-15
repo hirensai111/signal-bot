@@ -145,6 +145,15 @@ class DataIngestor:
 
     async def _websocket_loop(self, client: AsyncClient) -> None:
         bsm = BinanceSocketManager(client)
+        # Binance moved klines and aggTrade to /market in 2026. New SDKs
+        # route by category; older SDKs need the production base adjusted.
+        from inspect import signature
+
+        if (
+            not settings.binance_testnet
+            and "category" not in signature(bsm.futures_multiplex_socket).parameters
+        ):
+            bsm.FSTREAM_URL = bsm.FSTREAM_URL.rstrip("/").removesuffix("/market") + "/market/"
         streams = [f"{sym.lower()}@{stream}" for sym in self.symbols for stream in self.streams]
 
         backoff = 1.0

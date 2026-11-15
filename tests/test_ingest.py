@@ -2,11 +2,47 @@
 
 import asyncio
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from signal_bot.ingest.binance_ws import AggTrade, DataIngestor, Kline
+
+
+@pytest.mark.parametrize("testnet", [False, True])
+async def test_legacy_sdk_market_route_preserves_testnet(monkeypatch, testnet):
+    class LegacyManager:
+        FSTREAM_URL = "wss://fstream.binance.com/"
+
+        def futures_multiplex_socket(self, streams):
+            raise AssertionError("shutdown probe must not connect")
+
+    manager = LegacyManager()
+    monkeypatch.setattr("signal_bot.ingest.binance_ws.settings.binance_testnet", testnet)
+    monkeypatch.setattr("signal_bot.ingest.binance_ws.BinanceSocketManager", lambda _: manager)
+    ingestor = DataIngestor(asyncio.Queue())
+    ingestor.shutdown()
+    await ingestor._websocket_loop(None)
+    expected = "wss://fstream.binance.com/" if testnet else "wss://fstream.binance.com/market/"
+    assert manager.FSTREAM_URL == expected
+    await ingestor._websocket_loop(None)
+    assert manager.FSTREAM_URL == expected
+
+
+async def test_installed_sdk_constructs_exactly_one_market_path(monkeypatch):
+    from binance import BinanceSocketManager
+
+    manager = BinanceSocketManager(
+        SimpleNamespace(tld="com", testnet=False, demo=False, https_proxy=None, TIME_UNIT=None)
+    )
+    monkeypatch.setattr("signal_bot.ingest.binance_ws.settings.binance_testnet", False)
+    monkeypatch.setattr("signal_bot.ingest.binance_ws.BinanceSocketManager", lambda _: manager)
+    ingestor = DataIngestor(asyncio.Queue())
+    ingestor.shutdown()
+    await ingestor._websocket_loop(None)
+    socket = manager.futures_multiplex_socket(["btcusdt@kline_4h"])
+    assert socket._url == "wss://fstream.binance.com/market/"
 
 
 class MockStream:
