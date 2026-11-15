@@ -63,7 +63,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: Unit, failure-scenario and replay tests (SQLite)
         run: pytest -q -m "not postgres" --junitxml=junit-${{ matrix.python }}.xml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: junit-${{ matrix.python }}
@@ -128,7 +128,7 @@ jobs:
               --source synthetic --symbols AAAUSDT,BBBUSDT --seed 7 --bars 20000 --out "replay-$run"
           done
           python scripts/compare_reports.py replay-a replay-b
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: replay-report
           path: replay-a/
