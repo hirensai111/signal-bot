@@ -169,6 +169,7 @@ jobs:
           for needed in ("signal_bot/observability/static/control_room.html",
                          "signal_bot/research/strategies/liquidity_sweep.toml",
                          "signal_bot/research/strategies/trend_portfolio_tp15.toml",
+                         "signal_bot/research/strategies/trend_portfolio_tp15_pause.toml",
                          "signal_bot/venues/paper.py"):
               assert needed in names, needed
           print("ok")
@@ -205,3 +206,4 @@ jobs:
           sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci/; s/^GRAFANA_DB_PASSWORD=.*/GRAFANA_DB_PASSWORD=ci/; s/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=ci/' .env
           docker compose config --quiet
           docker compose --profile tp config --quiet
+          docker compose --profile tp --profile tp2 config --quiet

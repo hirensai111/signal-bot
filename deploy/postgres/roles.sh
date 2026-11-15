@@ -1,6 +1,7 @@
 #!/bin/sh
 # Idempotent: a read-only role for Grafana's trade-performance panels, and the database
-# of the optional second paper bot (signal_bot_tp, compose profile "tp").
+# of the optional second and third paper bots (signal_bot_tp and signal_bot_tp2,
+# compose profiles "tp" and "tp2").
 # Runs on every `docker compose up` (one-shot service), so existing databases get it too.
 set -eu
 until pg_isready -q; do sleep 1; done
@@ -15,12 +16,16 @@ GRANT USAGE ON SCHEMA public TO grafana_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
 -- tables the bot creates later (it owns them as signalbot)
 ALTER DEFAULT PRIVILEGES FOR ROLE signalbot IN SCHEMA public GRANT SELECT ON TABLES TO grafana_ro;
-SELECT 'CREATE DATABASE signal_bot_tp OWNER signalbot'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'signal_bot_tp') \gexec
-GRANT CONNECT ON DATABASE signal_bot_tp TO grafana_ro;
-\connect signal_bot_tp
+SQL
+for db in signal_bot_tp signal_bot_tp2; do
+  psql -v ON_ERROR_STOP=1 -v db="$db" <<'SQL'
+SELECT format('CREATE DATABASE %I OWNER signalbot', :'db')
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db') \gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO grafana_ro', :'db') \gexec
+\connect :db
 GRANT USAGE ON SCHEMA public TO grafana_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
 ALTER DEFAULT PRIVILEGES FOR ROLE signalbot IN SCHEMA public GRANT SELECT ON TABLES TO grafana_ro;
 SQL
-echo "grafana_ro role ready (read-only); database signal_bot_tp ready"
+done
+echo "grafana_ro role ready (read-only); databases signal_bot_tp and signal_bot_tp2 ready"

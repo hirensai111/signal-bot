@@ -732,7 +732,9 @@ td.r, th.r { text-align: right; }
       ["Correlation-adjusted risk", over(port.correlated_risk_pct, lim.max_correlated_risk * 100)],
       ["Gross leverage", `${fmtNum(port.gross_leverage, 2)}x of ${fmtNum(lim.max_gross_leverage, 1)}x`],
       ["Risk per trade", `${pct(lim.risk_per_trade * 100)}${port.risk_scaled ? " (halved: in drawdown)" : ""}`],
-      ["New entries", port.entries_allowed ? "Allowed" : "Stopped: drawdown limit"],
+      ...(lim.loss_pause_after ? [["Losing streak", `${port.loss_streak || 0} in a row (pause after ${lim.loss_pause_after}, for ${lim.loss_pause_hours}h)`]] : []),
+      ["New entries", port.loss_pause_until ? `Paused after ${port.loss_streak} losses until ${fmtTime(port.loss_pause_until)}`
+        : port.entries_allowed ? "Allowed" : "Stopped: drawdown limit"],
     ] : [["Portfolio", "Not running (strategy is not the trend portfolio)"]];
     for (const [k, v] of pairs2) { pf.appendChild(el("dt", k)); pf.appendChild(el("dd", v)); }
 

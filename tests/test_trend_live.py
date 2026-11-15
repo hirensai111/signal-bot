@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import tomllib
+import uuid
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
@@ -20,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from signal_bot.core.clock import ManualClock
-from signal_bot.db.models import Base, Signal
+from signal_bot.db.models import Base, Signal, TradeResult
 from signal_bot.events import EventBus, InMemoryJournal
 from signal_bot.events.envelope import EventType
 from signal_bot.execution.adapter import InstrumentSpec
@@ -306,6 +307,54 @@ async def test_fixed_target_variant_sends_the_target_and_no_trail(pipeline_env):
         risk = s.entry - s.stop_loss  # longs
         assert s.take_profit == pytest.approx(s.entry + Decimal("1.5") * risk, rel=Decimal("1e-9"))
         assert s.time_stop_at == env["last_close"] + STEP * 181  # time stop still applies
+
+
+async def _record_results(factory, pnls, closed_at):
+    async with factory() as session:
+        for i, pnl in enumerate(pnls):
+            session.add(
+                TradeResult(
+                    signal_id=uuid.uuid4(),
+                    venue="paper",
+                    symbol="AAAUSD",
+                    side="long",
+                    intended_entry=Decimal("100"),
+                    actual_entry=Decimal("100"),
+                    exit_price=Decimal("100"),
+                    exit_reason="sl",
+                    size_requested=Decimal("1"),
+                    size_filled=Decimal("1"),
+                    gross_pnl=Decimal(str(pnl)),
+                    fees=Decimal("0"),
+                    funding=Decimal("0"),
+                    net_pnl=Decimal(str(pnl)),
+                    signal_r=Decimal("-1"),
+                    realized_r=Decimal("-1"),
+                    entry_slippage_bps=Decimal("0"),
+                    closed_at=closed_at + timedelta(minutes=i),
+                )
+            )
+        await session.commit()
+
+
+async def test_cooling_off_pause_refuses_the_batch_after_a_losing_streak(pipeline_env):
+    """Third paper bot: 5 losses in a row in this bot's trade_results pause new entries."""
+    env = pipeline_env
+    pipe, frames, clock = env["pipe"], env["frames"], env["clock"]
+    paused = replace(env["limits"], loss_pause_after=5, loss_pause_hours=48)
+    pipe.limits = pipe.portfolio.limits = paused
+    await _record_results(env["factory"], [-50] * 5, env["last_close"] - timedelta(hours=10))
+    assert (await pipe.portfolio.loss_streak())[0] == 5
+    clock.set(env["last_close"] + timedelta(seconds=2))
+    for sym in SPECS:
+        await pipe.handle_candle(klines(frames[sym].iloc[-1:], sym)[0])
+    assert env["signal_q"].empty()
+    reasons = [d["reason"] for d in pipe.last_batch["decisions"]]
+    assert reasons and all(r.startswith("loss_streak_pause:5") for r in reasons)
+    assert pipe.portfolio.last_summary["entries_allowed"] is False
+    # a win resets the streak: the governor's re-check no longer sees a pause
+    await _record_results(env["factory"], [75], env["last_close"] - timedelta(hours=1))
+    assert (await pipe.portfolio.loss_streak())[0] == 0
 
 
 async def test_late_candles_update_history_but_never_trade(pipeline_env):

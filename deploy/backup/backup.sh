@@ -1,7 +1,8 @@
 #!/bin/sh
 # Daily PostgreSQL dump (custom format, restorable with deploy/restore.sh) plus the
-# paper broker's state file.  The second paper bot (compose profile "tp") is backed up the
-# same way, as signal_bot_tp-*.dump and paper_state_tp-*.json, once its database has tables.  Keeps BACKUP_RETENTION_DAYS days in /backups (./backups
+# paper broker's state file.  The second and third paper bots (compose profiles "tp" and
+# "tp2") are backed up the same way, as signal_bot_tp[2]-*.dump and paper_state_tp[2]-*.json,
+# once their database has tables.  Keeps BACKUP_RETENTION_DAYS days in /backups (./backups
 # on the host).  Writes a node-exporter textfile metric so Prometheus can alert on a
 # stale backup.
 set -eu
@@ -15,20 +16,24 @@ while true; do
     if [ -f /botdata/paper_state.json ]; then
       cp /botdata/paper_state.json "/backups/paper_state-$stamp.json"
     fi
-    # Second paper bot: only once its database exists and the bot has created its tables.
-    if [ "$(psql -d signal_bot_tp -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>/dev/null || echo 0)" -gt 0 ]; then
-      tmp_tp="/backups/.signal_bot_tp-$stamp.dump.partial"
-      if pg_dump -Fc -d signal_bot_tp -f "$tmp_tp"; then
-        mv "$tmp_tp" "/backups/signal_bot_tp-$stamp.dump"
-      else
-        rm -f "$tmp_tp"
-        echo "backup of signal_bot_tp FAILED at $stamp" >&2
+    # Second and third paper bots: only once a database exists and its bot created tables.
+    for suffix in tp tp2; do
+      db="signal_bot_$suffix"
+      if [ "$(psql -d "$db" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>/dev/null || echo 0)" -gt 0 ]; then
+        part="/backups/.${db}-$stamp.dump.partial"
+        if pg_dump -Fc -d "$db" -f "$part"; then
+          mv "$part" "/backups/${db}-$stamp.dump"
+        else
+          rm -f "$part"
+          echo "backup of $db FAILED at $stamp" >&2
+        fi
+        if [ -f "/botdata-$suffix/paper_state.json" ]; then
+          cp "/botdata-$suffix/paper_state.json" "/backups/paper_state_${suffix}-$stamp.json"
+        fi
       fi
-      if [ -f /botdata-tp/paper_state.json ]; then
-        cp /botdata-tp/paper_state.json "/backups/paper_state_tp-$stamp.json"
-      fi
-    fi
-    for pattern in 'signal_bot-*.dump' 'paper_state-*.json' 'signal_bot_tp-*.dump' 'paper_state_tp-*.json'; do
+    done
+    for pattern in 'signal_bot-*.dump' 'paper_state-*.json' 'signal_bot_tp-*.dump' 'paper_state_tp-*.json' \
+                   'signal_bot_tp2-*.dump' 'paper_state_tp2-*.json'; do
       find /backups -maxdepth 1 -name "$pattern" -mtime +"$BACKUP_RETENTION_DAYS" -delete
     done
     size=$(wc -c < "/backups/signal_bot-$stamp.dump")

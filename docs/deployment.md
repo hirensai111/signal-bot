@@ -189,6 +189,56 @@ Tailscale command above.
 **Turn it off:** remove `COMPOSE_PROFILES=tp` from `.env` and run
 `sudo docker compose --profile tp stop bot-tp`. Its database and volume are kept.
 
+## Third paper bot (+1.5R, 5% correlated risk, loss pause)
+
+An optional third bot runs the second bot's strategy with two account rules changed, so
+the forward test shows whether those rules help:
+
+| | Second bot (`bot-tp`) | Third bot (`bot-tp2`) |
+|---|---|---|
+| Strategy | `trend_portfolio_tp15.toml` | `trend_portfolio_tp15_pause.toml`: the **same entries and exits** (+1.5R target, fixed 2 ATR stop) |
+| Correlated risk limit | 2% | **5%** |
+| Losing streak | no pause | **no new entries for 48 hours after 5 losing trades in a row** (counted from this bot's own closed trades; open positions are still managed) |
+| Other portfolio rules | 0.5% risk per trade, 6 positions, 3% open risk, drawdown brakes | identical |
+| Database / state | `signal_bot_tp`, volume `botdata-tp` | `signal_bot_tp2` (created by `db-roles`), volume `botdata-tp2` |
+| Control room | `127.0.0.1:8081` | `127.0.0.1:8082` |
+| Telegram | tagged `[TP 1.5R]`, send-only | tagged `[TP 1.5R + pause]`, send-only |
+
+Why these rules: see docs/research.md, *Cooling-off pause*. Like the second bot's exit,
+they were chosen after the holdout year had been seen.
+
+**First launch as a copy of the second bot.** The third bot starts with exactly the
+second bot's trades, open positions and balance, so the two are compared from the same
+point. The exits are identical, so nothing is replayed: the database and paper
+checkpoint are copied as they are. On the server, with the approved release checked out,
+`bot-tp` running and `tp2` not yet in `COMPOSE_PROFILES`:
+
+```bash
+cd /opt/signal-bot && sudo bash deploy/fork-paper-tp2.sh
+```
+
+The command builds the image and runs preflight, checks that `signal_bot_tp2` and the
+`botdata-tp2` volume are empty, stops `bot-tp` for a few seconds, copies its database
+(`pg_dump` / `pg_restore`) and `paper_state.json`, and starts every service. The
+snapshot and a `fork.json` with the copied counts are kept in
+`backups/paper-fork-tp2-*`. If anything fails, `bot-tp` is started again and nothing
+is overwritten. Then:
+
+```bash
+cd /opt/signal-bot && sudo sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=tp,tp2/' .env
+sudo tailscale serve --bg --https=8445 http://127.0.0.1:8082
+```
+
+**Watching it:** control room on `:8445`. Its *Portfolio* panel shows the losing
+streak and, while paused, "Paused after N losses until …". In Grafana pick
+**TP 1.5R + pause** in the Bot selector and **Signal Bot DB (TP 1.5R + pause)** as the
+trade database. Alerts start with `[TP 1.5R + pause bot]`. Backups add
+`signal_bot_tp2-<stamp>.dump` and `paper_state_tp2-<stamp>.json`. Soak report:
+`sudo docker compose exec bot-tp2 python -m signal_bot.ops.soak --prometheus http://prometheus:9090 --instance bot-tp2:8080`
+
+**Turn it off:** set `COMPOSE_PROFILES=tp` in `.env` and run
+`sudo docker compose --profile tp2 stop bot-tp2`. Its database and volume are kept.
+
 ## Access and permissions
 
 - **Nothing public.** Every port is bound to `127.0.0.1`. `tailscale serve` makes

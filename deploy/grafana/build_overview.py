@@ -6,7 +6,8 @@ Rows: Overview, Trading performance, Risk & operations, Logs.  Every metric it u
 is checked against the bot's registry by tests/test_deploy.py, so a renamed metric
 fails CI instead of silently blanking a panel.
 
-Two paper bots can run side by side (docs/deployment.md, "Second paper bot").  The "Bot"
+Up to three paper bots can run side by side (docs/deployment.md, "Second paper bot",
+"Third paper bot").  The "Bot"
 selector at the top switches every Prometheus and log panel between them; the "Trade
 database" selector does the same for the PostgreSQL panels (each bot has its own database).
 """
@@ -896,11 +897,13 @@ FROM signals WHERE strategy = 'trend_breakout' ORDER BY created_at DESC LIMIT 30
                     "name": "bot",
                     "label": "Bot",
                     "type": "custom",
-                    "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp",
+                    "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp,"
+                    "TP 1.5R + pause : bot-tp2",
                     "current": {"text": "Main (trailing stop)", "value": "bot"},
                     "options": [
                         {"text": "Main (trailing stop)", "value": "bot", "selected": True},
                         {"text": "TP 1.5R (fixed exit)", "value": "bot-tp", "selected": False},
+                        {"text": "TP 1.5R + pause", "value": "bot-tp2", "selected": False},
                     ],
                 },
                 {

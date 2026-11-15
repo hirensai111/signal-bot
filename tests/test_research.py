@@ -219,6 +219,20 @@ def test_tp15_configs_describe_the_same_entries_with_the_fixed_exit():
     pmain, ptp = load("trend_portfolio"), load("trend_portfolio_tp15")
     assert pmain["portfolio"] == ptp["portfolio"] and pmain["universe"] == ptp["universe"]
     assert pmain["costs"] == ptp["costs"]
+    # third bot: the second bot's strategy, with only the two account rules changed
+    pause = load("trend_portfolio_tp15_pause")
+    assert pause["params"] == ptp["params"] and pause["signal_config"] == ptp["signal_config"]
+    changed = {
+        k
+        for k in ptp["portfolio"].keys() | pause["portfolio"].keys()
+        if ptp["portfolio"].get(k) != pause["portfolio"].get(k)
+    }
+    assert changed == {"max_correlated_risk", "loss_pause_after", "loss_pause_hours"}
+    assert pause["portfolio"]["max_correlated_risk"] == 0.05
+    assert (pause["portfolio"]["loss_pause_after"], pause["portfolio"]["loss_pause_hours"]) == (
+        5,
+        48,
+    )
 
 
 def test_sweep_v2_filters_tight_stops_and_resets_targets(monkeypatch):

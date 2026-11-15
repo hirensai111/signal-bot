@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.4.0
+
+A third paper bot to forward-test two account rules on the second bot's strategy.
+
+### Added
+- **Cooling-off pause** (portfolio rule 9, off by default): `loss_pause_after` losing
+  trades in a row stop new entries for `loss_pause_hours` after the latest loss. Open
+  positions are still managed. Research and live share the rule in `risk/portfolio.py`;
+  the live bot counts from its own `trade_results`.
+- **`trend_portfolio_tp15_pause`:** the second bot's strategy with
+  `max_correlated_risk = 0.05` and a 48-hour pause after 5 losses in a row
+  (docs/research.md, *Cooling-off pause*).
+- **Third paper bot (`bot-tp2`, compose profile `tp2`):** database `signal_bot_tp2`,
+  volume `botdata-tp2`, control room on 127.0.0.1:8082, Telegram tag `[TP 1.5R + pause]`.
+  Prometheus, Grafana selectors, alerts, Loki, backups, restore and `deploy/update.sh`
+  include it.
+- **`deploy/fork-paper-tp2.sh`:** first launch as an exact copy of the second bot's
+  database and paper checkpoint, so both continue from the same trades and balance.
+- **Control room:** the *Portfolio* panel shows the losing streak and the pause.
+
 ## 2.3.0
 
 A second paper bot to forward-test a fixed +1.5R exit next to the unchanged strategy,

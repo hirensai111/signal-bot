@@ -2,13 +2,15 @@
 # Restore a database dump made by the backup service.
 #   deploy/restore.sh backups/signal_bot-20261102T000000Z.dump [backups/paper_state-....json]
 #   deploy/restore.sh backups/signal_bot_tp-....dump [backups/paper_state_tp-....json]   (second bot)
+#   deploy/restore.sh backups/signal_bot_tp2-....dump [backups/paper_state_tp2-....json] (third bot)
 # Stops the bot, restores into the running postgres service, restores the paper broker
 # state if given, then starts the bot again.  The current database is replaced.
 set -euo pipefail
-dump=${1:?usage: deploy/restore.sh <signal_bot-*.dump | signal_bot_tp-*.dump> [paper_state-*.json]}
+dump=${1:?usage: deploy/restore.sh <signal_bot-*.dump | signal_bot_tp-*.dump | signal_bot_tp2-*.dump> [paper_state-*.json]}
 state=${2:-}
 [ -f "$dump" ] || { echo "no such dump: $dump" >&2; exit 1; }
 case "$(basename "$dump")" in
+  signal_bot_tp2-*) db=signal_bot_tp2; service=bot-tp2; compose=(docker compose --profile tp2) ;;
   signal_bot_tp-*) db=signal_bot_tp; service=bot-tp; compose=(docker compose --profile tp) ;;
   *) db=signal_bot; service=bot; compose=(docker compose) ;;
 esac

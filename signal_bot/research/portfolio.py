@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 
 from signal_bot.research import metrics as M
-from signal_bot.research.data import Dataset
+from signal_bot.research.data import INTERVAL_MINUTES, Dataset
 from signal_bot.research.fill_model import (
     NO_TARGET,
     CostModel,
@@ -212,6 +212,9 @@ def run_portfolio(
     cash = initial
     peak = initial
     open_: dict[str, OpenTrade] = {}
+    bar = pd.Timedelta(minutes=INTERVAL_MINUTES[params.timeframe])
+    loss_streak = 0  # for the optional cooling-off pause (losses in the order they close)
+    last_loss_at = None
     for t in timeline:
         if t >= t_end:
             break
@@ -229,6 +232,11 @@ def run_portfolio(
                 cash += ot.trade.net_pnl
                 ot.trade.equity_after = cash
                 del open_[name]
+                if ot.trade.net_pnl <= 0:
+                    loss_streak += 1
+                    last_loss_at = t + bar  # known at this bar's close
+                else:
+                    loss_streak = 0
         if not live:
             continue
         # 2. mark to market at the close of t
@@ -268,7 +276,9 @@ def run_portfolio(
         if t not in corr_cache:
             window = rets[rets.index <= t].iloc[-limits.correlation_lookback_bars :]
             corr_cache[t] = correlations_from_returns(window, limits.correlation_min_bars)
-        state = PortfolioState(equity, peak, positions, corr_cache[t])
+        state = PortfolioState(
+            equity, peak, positions, corr_cache[t], loss_streak, last_loss_at, t + bar
+        )
         run.candidates_per_bar[len(cands)] += 1
         accepted = 0
         for a in admit(state, cands, limits):

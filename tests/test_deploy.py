@@ -113,10 +113,37 @@ def test_second_paper_bot_is_optional_paper_only_and_separate():
     assert tp["ports"] == ["127.0.0.1:8081:8080"]
     assert tp["image"] == main["image"]
     roles = (ROOT / "deploy/postgres/roles.sh").read_text()
-    assert "CREATE DATABASE signal_bot_tp" in roles
+    assert "for db in signal_bot_tp signal_bot_tp2" in roles and "CREATE DATABASE %I" in roles
     assert "signal_bot_tp" in (ROOT / "deploy/backup/backup.sh").read_text()
     prom = (ROOT / "deploy/prometheus/prometheus.yml").read_text()
-    assert '"bot-tp"' in prom and "bot-tp:8080" in prom
+    assert '"bot-tp"' in prom and "regex: (bot-tp2?)" in prom
+
+
+def test_third_paper_bot_copies_the_second_and_changes_only_its_account_rules():
+    compose = yaml.safe_load(COMPOSE.read_text())
+    services = compose["services"]
+    tp2, tp = services["bot-tp2"], services["bot-tp"]
+    env = tp2["environment"]
+    assert tp2["profiles"] == ["tp2"]
+    assert env["EXEC_MODE"] == "paper" and env["PAPER_ONLY"] == "true"
+    assert env["STRATEGY_CONFIG"].endswith("trend_portfolio_tp15_pause.toml")
+    assert env["DATABASE_URL"].endswith("/signal_bot_tp2")
+    assert (
+        env["TELEGRAM_COMMANDS"] == "false" and env["BOT_LABEL"] != tp["environment"]["BOT_LABEL"]
+    )
+    assert tp2["ports"] == ["127.0.0.1:8082:8080"] and "botdata-tp2" in compose["volumes"]
+    assert tp2["image"] == tp["image"]
+    # every port and volume is its own
+    ports = [p for svc in services.values() for p in svc.get("ports", [])]
+    assert len(ports) == len(set(ports))
+    for path in ("deploy/postgres/roles.sh", "deploy/backup/backup.sh", "deploy/restore.sh"):
+        assert "tp2" in (ROOT / path).read_text(), path
+    assert "bot-tp2" in (ROOT / "deploy/grafana/dashboards/signal-bot-overview.json").read_text()
+    fork = (ROOT / "deploy/fork-paper-tp2.sh").read_text()
+    # copies the second bot's database and paper checkpoint into the empty third bot
+    assert "pg_dump -Fc -U signalbot -d signal_bot_tp " in fork
+    assert "-d signal_bot_tp2 <" in fork and "stop bot-tp" in fork
+    assert "already contains tables" in fork and 'test ! -e "$PAPER_STATE_PATH"' in fork
 
 
 def test_overview_dashboard_is_generated_from_its_source():

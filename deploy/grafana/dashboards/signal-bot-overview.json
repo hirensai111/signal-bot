@@ -38,7 +38,7 @@
     "name": "bot",
     "label": "Bot",
     "type": "custom",
-    "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp",
+    "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp,TP 1.5R + pause : bot-tp2",
     "current": {
      "text": "Main (trailing stop)",
      "value": "bot"
@@ -52,6 +52,11 @@
      {
       "text": "TP 1.5R (fixed exit)",
       "value": "bot-tp",
+      "selected": false
+     },
+     {
+      "text": "TP 1.5R + pause",
+      "value": "bot-tp2",
       "selected": false
      }
     ]
