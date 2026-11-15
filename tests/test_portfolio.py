@@ -149,6 +149,34 @@ def test_drawdown_halves_risk_then_stops_entries():
     assert summary["entries_allowed"] is False and summary["drawdown_pct"] == pytest.approx(20)
 
 
+def test_cooling_off_pause_after_a_losing_streak():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 11, 15, 12, tzinfo=timezone.utc)
+    lim = PortfolioLimits(loss_pause_after=5, loss_pause_hours=48)
+
+    def st(streak, hours_since_last_loss):
+        return PortfolioState(
+            10_000, 10_000, (), {}, streak, now - timedelta(hours=hours_since_last_loss), now
+        )
+
+    # 5 losses in a row, the last 10 hours ago: every candidate is refused
+    out = admit(st(5, 10), [cand("A"), cand("B")], lim)
+    assert not any(a.accepted for a in out)
+    assert all(a.reason.startswith("loss_streak_pause:5") for a in out)
+    summary = exposure_summary(st(5, 10), lim)
+    assert summary["entries_allowed"] is False and summary["loss_pause_until"]
+    # the pause ends 48 hours after the last loss
+    [a] = admit(st(5, 48.5), [cand("A")], lim)
+    assert a.accepted
+    # 4 losses is not enough; a longer streak pauses from its latest loss
+    assert admit(st(4, 1), [cand("A")], lim)[0].accepted
+    assert not admit(st(7, 47), [cand("A")], lim)[0].accepted
+    # off by default (the main and second bots)
+    assert admit(st(9, 1), [cand("A")], PortfolioLimits())[0].accepted
+    assert exposure_summary(st(9, 1), PortfolioLimits())["loss_pause_until"] is None
+
+
 def test_a_stop_beyond_half_the_liquidation_distance_is_refused():
     # 5x isolated margin liquidates near a 20% move; stops beyond 10% are refused
     [a] = admit(state(), [cand("A", entry=100, stop=89)], PortfolioLimits(position_leverage=5))
@@ -168,8 +196,11 @@ def test_return_correlations_are_causal_and_need_enough_overlap():
     assert short == {}  # too little overlap: treated as 1 by the rules
 
 
-def test_portfolio_config_runs_the_frozen_pre_registered_signal():
-    with open("signal_bot/research/strategies/trend_portfolio.toml", "rb") as fh:
+@pytest.mark.parametrize(
+    "name", ["trend_portfolio", "trend_portfolio_tp15", "trend_portfolio_tp15_pause"]
+)
+def test_portfolio_config_runs_the_frozen_pre_registered_signal(name):
+    with open(f"signal_bot/research/strategies/{name}.toml", "rb") as fh:
         portfolio = tomllib.load(fh)
     with open(portfolio["signal_config"], "rb") as fh:
         signal = tomllib.load(fh)

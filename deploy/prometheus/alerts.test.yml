@@ -62,7 +62,7 @@ tests:
       - eval_time: 35m
         alertname: NoTradableSymbolReady
         exp_alerts:
-          - exp_labels: {severity: critical, component: bot}
+          - exp_labels: {severity: critical, component: bot, instance: "bot:8080"}
             exp_annotations:
               summary: "No tradable symbol has enough 4h history: the strategy cannot trade"
               action: "Usually the Binance warm-up failed (HTTP 451 = restricted region). Run the preflight: docker compose run --rm bot python -m signal_bot.ops.preflight"
@@ -87,7 +87,7 @@ tests:
       - eval_time: 4h25m
         alertname: Stale4hCandles
         exp_alerts:
-          - exp_labels: {severity: critical, component: bot}
+          - exp_labels: {severity: critical, component: bot, instance: "bot:8080"}
             exp_annotations:
               summary: "No completed 4h candle for any symbol for over 4h15m: the market-data feed is stale"
               action: "Check the Market data interlock in the control room and the ingestor logs (subsystem=ingest)."
@@ -159,3 +159,24 @@ tests:
             exp_annotations:
               summary: "1 open position(s) have no stop on the venue"
               action: "The engine attaches a recovery stop or flattens; check the control room Stops panel and the kill switch."
+
+  - name: two paper bots are judged separately
+    interval: 5m
+    input_series:
+      # the main bot is fine; the second (TP) bot has no ready symbol
+      - series: 'signalbot_trend_symbol_ready{job="signal-bot", instance="bot:8080", symbol="BTCUSDT"}'
+        values: "1x20"
+      - series: 'signalbot_trend_symbol_tradable{job="signal-bot", instance="bot:8080", symbol="BTCUSDT"}'
+        values: "1x20"
+      - series: 'signalbot_trend_symbol_ready{job="signal-bot", instance="bot-tp:8080", symbol="BTCUSDT"}'
+        values: "0x20"
+      - series: 'signalbot_trend_symbol_tradable{job="signal-bot", instance="bot-tp:8080", symbol="BTCUSDT"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: NoTradableSymbolReady
+        exp_alerts:
+          - exp_labels: {severity: critical, component: bot, instance: "bot-tp:8080"}
+            exp_annotations:
+              summary: "No tradable symbol has enough 4h history: the strategy cannot trade"
+              action: "Usually the Binance warm-up failed (HTTP 451 = restricted region). Run the preflight: docker compose run --rm bot python -m signal_bot.ops.preflight"

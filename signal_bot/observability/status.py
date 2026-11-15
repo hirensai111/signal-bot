@@ -197,6 +197,9 @@ class StatusService:
                     if o.current_stop_price is None
                     else str(o.current_stop_price),
                     "next_stop": None if target is None else str(target),
+                    "take_profit": None
+                    if o.take_profit_price is None
+                    else str(o.take_profit_price),
                     "trail_distance": None if o.trail_distance is None else str(o.trail_distance),
                     "best_reference_price": None if o.best_price is None else str(o.best_price),
                     "stop_updated_at": _iso(o.stop_updated_at),

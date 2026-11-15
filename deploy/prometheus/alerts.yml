@@ -1,6 +1,8 @@
 # Alert rules for the paper deployment.  Routed by Alertmanager to Telegram
 # (deploy/alertmanager).  Tested with `promtool test rules alerts.test.yml`.
 # component="bot" alerts are muted while BotDown fires (they would be consequences).
+# Two paper bots may run (instance bot:8080 and bot-tp:8080): every bot alert is per
+# instance, so one bot's health never hides the other's problem.
 groups:
   - name: availability
     rules:
@@ -34,7 +36,7 @@ groups:
   - name: market-data
     rules:
       - alert: NoTradableSymbolReady
-        expr: sum(signalbot_trend_symbol_ready * signalbot_trend_symbol_tradable) == 0
+        expr: sum by (instance) (signalbot_trend_symbol_ready * signalbot_trend_symbol_tradable) == 0
         for: 30m
         labels: {severity: critical, component: bot}
         annotations:
@@ -48,7 +50,7 @@ groups:
           summary: "{{ $labels.symbol }} is tradable but has not got enough 4h history after an hour"
           action: "The REST warm-up for this symbol failed; restart the bot once Binance is reachable."
       - alert: Stale4hCandles
-        expr: time() - max(signalbot_trend_last_bar_close_timestamp_seconds) > 4 * 3600 + 15 * 60
+        expr: time() - max by (instance) (signalbot_trend_last_bar_close_timestamp_seconds) > 4 * 3600 + 15 * 60
         for: 5m
         labels: {severity: critical, component: bot}
         annotations:
@@ -62,7 +64,7 @@ groups:
           summary: "{{ $labels.symbol }} has had no completed 4h candle for over 4h15m"
           action: "One stream is stale while others update; a bot restart re-subscribes."
       - alert: MarketDataStale
-        expr: max(signalbot_market_data_age_seconds{interval="1m"}) > 180
+        expr: max by (instance) (signalbot_market_data_age_seconds{interval="1m"}) > 180
         for: 2m
         labels: {severity: warning, component: bot}
         annotations:
@@ -163,7 +165,7 @@ groups:
         annotations:
           summary: "An order submission outcome was ambiguous (resolved by lookup)"
       - alert: EventBacklogGrowing
-        expr: max(signalbot_event_queue_lag) > 500
+        expr: max by (instance) (signalbot_event_queue_lag) > 500
         for: 2m
         labels: {severity: warning, component: bot}
         annotations:

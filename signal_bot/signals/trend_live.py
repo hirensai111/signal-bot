@@ -35,9 +35,10 @@ from decimal import Decimal
 from typing import Any
 
 import aiohttp
+from sqlalchemy import select
 
 from signal_bot.core.clock import SYSTEM_CLOCK, Clock
-from signal_bot.db.models import RiskState, Signal
+from signal_bot.db.models import RiskState, Signal, TradeResult
 from signal_bot.events.envelope import Event, EventType
 from signal_bot.execution.orders import EXPOSURE_STATES
 from signal_bot.features.candle_history import CandleHistory
@@ -184,6 +185,32 @@ class LivePortfolio:
             )
         return out
 
+    async def loss_streak(self) -> tuple[int, datetime | None]:
+        """Losing trades in a row (net P&L <= 0) among the latest closes, and the newest close.
+
+        Read from this bot's own ``trade_results`` (one database per bot), so trades
+        inherited by a paper fork count too.  Only queried when the pause is enabled.
+        """
+        if self.limits.loss_pause_after <= 0:
+            return 0, None
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(TradeResult.net_pnl, TradeResult.closed_at)
+                    .order_by(TradeResult.closed_at.desc())
+                    .limit(max(100, self.limits.loss_pause_after))
+                )
+            ).all()
+        streak = 0
+        for net, _ in rows:
+            if net > 0:
+                break
+            streak += 1
+        last = rows[0][1] if streak and rows else None
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return streak, last
+
     async def state(self, at: datetime | None = None) -> PortfolioState:
         equity, peak = await self.equity_and_peak()
         positions = await self.positions()
@@ -192,7 +219,10 @@ class LivePortfolio:
             self.limits.correlation_lookback_bars,
             self.limits.correlation_min_bars,
         )
-        state = PortfolioState(equity, peak, tuple(positions), corr)
+        streak, last_loss = await self.loss_streak()
+        state = PortfolioState(
+            equity, peak, tuple(positions), corr, streak, last_loss, at or self.clock.now()
+        )
         summary = exposure_summary(state, self.limits)
         self.last_summary = {**summary, "as_of": self.clock.now().isoformat()}
         metrics.PORTFOLIO_EQUITY.set(equity)
@@ -430,7 +460,7 @@ class TrendPipeline:
             side=d.side,
             entry=Decimal(str(d.entry)),
             stop_loss=Decimal(str(d.stop)),
-            take_profit=None,
+            take_profit=None if d.take_profit is None else Decimal(str(d.take_profit)),
             leverage=leverage,
             risk_pct=Decimal(str(round(a.risk_fraction * 100, 6))),
             account_size_assumed=Decimal(str(round(equity, 8))),
@@ -455,7 +485,7 @@ class TrendPipeline:
                 "side": sig.side,
                 "entry": sig.entry,
                 "stop": sig.stop_loss,
-                "take_profit": None,
+                "take_profit": sig.take_profit,
                 "trail_distance": sig.trail_distance,
                 "time_stop_at": sig.time_stop_at,
                 "contracts": a.contracts,

@@ -4,7 +4,7 @@ global:
 templates: [/etc/alertmanager-src/telegram.tmpl]
 route:
   receiver: __RECEIVER__
-  group_by: [alertname, symbol]
+  group_by: [alertname, instance, symbol]
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 6h
@@ -20,9 +20,11 @@ route:
       receiver: __RECEIVER__
       repeat_interval: 1h
 inhibit_rules:
-  # While the bot is down, its other alerts are consequences, not news.
+  # While a bot is down, its other alerts are consequences, not news.  Per instance:
+  # the second paper bot being down must not mute the main bot's alerts.
   - source_matchers: ['alertname="BotDown"']
     target_matchers: ['component="bot"']
+    equal: [instance]
 receivers:
   - name: blackhole
   - name: telegram

@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 
 from signal_bot.research import metrics as M
-from signal_bot.research.data import Dataset
+from signal_bot.research.data import INTERVAL_MINUTES, Dataset
 from signal_bot.research.fill_model import (
     NO_TARGET,
     CostModel,
@@ -123,14 +123,16 @@ def _random_decisions(sym: _Symbol, real: dict[int, Any], params: TrendParams, r
     for i in sorted(rng.sample(eligible, k)):
         side = rng.choice(["long", "short"])
         risk = params.stop_atr * a[i]
+        sign = 1.0 if side == "long" else -1.0
         out[i] = _Decision(
             i,
             side,
             float(c[i]),
-            float(c[i] - risk if side == "long" else c[i] + risk),
+            float(c[i] - sign * risk),
             float(params.trail_atr * a[i]),
             rng.random(),
             params.max_hold_bars,
+            float(c[i] + sign * params.take_profit_r * risk) if params.take_profit_r > 0 else None,
         )
     return out
 
@@ -144,6 +146,7 @@ class _Decision:
     trail_distance: float
     strength: float
     max_hold_bars: int
+    take_profit: float | None = None
 
 
 def run_portfolio(
@@ -209,6 +212,9 @@ def run_portfolio(
     cash = initial
     peak = initial
     open_: dict[str, OpenTrade] = {}
+    bar = pd.Timedelta(minutes=INTERVAL_MINUTES[params.timeframe])
+    loss_streak = 0  # for the optional cooling-off pause (losses in the order they close)
+    last_loss_at = None
     for t in timeline:
         if t >= t_end:
             break
@@ -226,6 +232,11 @@ def run_portfolio(
                 cash += ot.trade.net_pnl
                 ot.trade.equity_after = cash
                 del open_[name]
+                if ot.trade.net_pnl <= 0:
+                    loss_streak += 1
+                    last_loss_at = t + bar  # known at this bar's close
+                else:
+                    loss_streak = 0
         if not live:
             continue
         # 2. mark to market at the close of t
@@ -265,7 +276,9 @@ def run_portfolio(
         if t not in corr_cache:
             window = rets[rets.index <= t].iloc[-limits.correlation_lookback_bars :]
             corr_cache[t] = correlations_from_returns(window, limits.correlation_min_bars)
-        state = PortfolioState(equity, peak, positions, corr_cache[t])
+        state = PortfolioState(
+            equity, peak, positions, corr_cache[t], loss_streak, last_loss_at, t + bar
+        )
         run.candidates_per_bar[len(cands)] += 1
         accepted = 0
         for a in admit(state, cands, limits):
@@ -278,7 +291,9 @@ def run_portfolio(
                 d.side,
                 d.entry,
                 d.stop,
-                NO_TARGET if d.side == "long" else -NO_TARGET,
+                d.take_profit
+                if d.take_profit is not None
+                else (NO_TARGET if d.side == "long" else -NO_TARGET),
                 d.max_hold_bars,
                 "breakout",
                 d.trail_distance,

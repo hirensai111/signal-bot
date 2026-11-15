@@ -313,3 +313,76 @@ What it shows:
   * The independent-backtest comparison ignored listing dates.
 
 Forward paper trading is now the only clean test left. The trend portfolio is the default `STRATEGY_CONFIG` for exactly that; nothing here supports live trading.
+
+### Exit variants (November 2026, after the holdout)
+
+A question from forward testing: the trailing stop gives back 1.5R from the best price,
+so would a fixed profit target do better? Four exits were compared on the same frozen
+entries and portfolio rules. **The holdout year had already been seen**, so this is a
+fourth look at it and none of these figures is out-of-sample.
+
+| Exit | 2021-01..2025-09 (all coins) | Development, Delta listing dates | Holdout 2025-10..2026-09 |
+|---|---|---|---|
+| A. 3 ATR trailing stop, no target (0.2.0) | +4.3%/yr, max DD -18.7%, 1170 trades, 37% wins | +13.4%/yr, -10.3% | +3.4%, -16.4% |
+| B. Target +1.5R, trailing until then | +7.9%/yr, -14.5%, 1489 trades, 38% | +16.2%/yr, -9.0% | +6.1%, -16.9% |
+| **C. Target +1.5R, fixed 2 ATR stop, no trailing** | **+9.1%/yr, -15.8%, 1390 trades, 45%** | **+18.6%/yr, -9.8%** | **+4.5%, -17.4%** |
+| D. Target +3R, trailing until then | +1.3%/yr, -17.6%, 1313 trades, 36% | +9.0%/yr, -9.3% | +5.5%, -16.7% |
+
+What it shows:
+
+* **A +1.5R target beat the trailing-only exit in every period** (B and C), with similar
+  or smaller drawdowns. Per trade, B averages less than A (+0.069R vs +0.084R); the gain
+  comes from trades closing sooner (1.5-2.0 days vs 2.2), which frees position slots for
+  breakouts the portfolio rules otherwise refuse, and from banking moves that reach
+  +1.5R and then reverse.
+* **B and C swap places** across periods; neither is clearly better. C is simpler (no
+  stop amendments) and won on the two development views.
+* **+3R is the worst of both:** rarely reached, and it still cuts the big trends.
+
+Because these numbers come from data already seen, variant C is not promoted. It runs as
+a **second paper bot** next to the unchanged 0.2.0 exit
+(`strategies/trend_portfolio_tp15.toml`, `take_profit_r = 1.5`, `trail_atr = 0`;
+docs/deployment.md, *Second paper bot*), so the forward test compares them on the same
+prices from the same day. The research code reproduces C exactly from that config
+(1390 trades, +9.1%/yr; 312 trades, +4.5% in the holdout).
+
+### Cooling-off pause (November 2026, after the holdout)
+
+Forward testing raised two account-rule questions for the second bot (variant C): the 2%
+correlated-risk limit was refusing most new signals while four shorts were open, and
+losses arrive in clusters. Variants were compared on the same entries and exits, with
+$10k and the live order of operations (stops move before new trades are admitted, on
+5-minute candles). **The holdout year had been seen many times by now**, so none of this
+is out-of-sample. Each cell is return per year and worst drawdown:
+
+| Variant | 2021-01..2025-09 | Development 2023..2025-09 | Holdout 2025-10..2026-09 |
+|---|---|---|---|
+| C as deployed (correlated 2%, no pause) | +8.5%, -15.8% | +18.6%, -9.8% | +5.1%, -17.4% |
+| Correlated 5% | +15.0%, -15.3% | +17.9%, -13.4% | +6.1%, -17.8% |
+| 5% + 24 h cooldown per coin after a loss | +16.1%, -14.4% | +11.8%, -13.1% | +7.6%, -16.7% |
+| 5% + 48 h cooldown per coin after a loss | +12.8%, -14.5% | +23.5%, -11.7% | +5.4%, -16.6% |
+| **5% + 48 h pause after 5 losing trades in a row** | **+18.6%, -10.9%** | **+19.7%, -10.8%** | **+5.9%, -15.3%** |
+| 5% + both | +16.3%, -12.8% | +19.8%, -10.3% | +5.6%, -15.3% |
+
+Average R per trade, deployed C vs 5% + pause: +0.099 vs +0.131 (2021-2025), +0.148 vs
++0.157 (development), +0.045 vs +0.073 (holdout), with fewer trades (1342 vs 1394).
+
+What it shows:
+
+* **The pause after a losing streak was the only variant better in every period.** It
+  skips part of the choppy phases in which breakouts keep failing, and resumes by itself.
+* **Per-coin cooldowns are noise:** 24 h and 48 h swap between best and worst.
+* **5% correlated risk alone is mixed;** most of its gain is in 2021-2022.
+* It changes two rules at once, and it was the last of many variants tried on the same
+  data, so part of the improvement is probably luck.
+
+So it is not promoted either. It runs as a **third paper bot** next to the second
+(`strategies/trend_portfolio_tp15_pause.toml`: `max_correlated_risk = 0.05`,
+`loss_pause_after = 5`, `loss_pause_hours = 48`; docs/deployment.md, *Third paper bot*),
+started as a copy of the second bot's account. The portfolio rule (`risk/portfolio.py`,
+rule 9) counts consecutive closed trades with net P&L <= 0 and refuses new entries until
+48 hours after the latest of them; research counts from the simulated closes and the live
+bot from its own `trade_results`. The repository's research runner reproduces the variant
+from that config (1342 trades, +18.3%/yr, max DD -10.8%; holdout 289 trades, +4.4%,
+-15.3%); the small difference from the table is the stop-timing order the runner still
+uses.

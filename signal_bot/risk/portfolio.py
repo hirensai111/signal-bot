@@ -33,6 +33,8 @@ Rules, applied to candidates in rank order (strongest breakout first, then symbo
    a stop farther than half the distance to liquidation (``0.5 / position_leverage``)
    is refused, so the stop, not the liquidation engine, closes a losing trade.  With
    ``max_gross_leverage`` 3 and ``position_leverage`` 5, margin in use stays <= 60%.
+9. **Cooling-off pause (optional).** After ``loss_pause_after`` losing trades in a row,
+   no new entries for ``loss_pause_hours`` after the latest loss.  Off by default.
 
 Every limit is a fraction of equity, so the rules scale with the account.
 """
@@ -42,6 +44,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field, fields, replace
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -62,6 +65,11 @@ class PortfolioLimits:
     correlation_lookback_bars: int = 180  # 30 days of 4h bars
     correlation_min_bars: int = 60
     position_leverage: int = 5
+    # Cooling-off pause: after this many losing trades in a row (net P&L <= 0, in the
+    # order they closed), take no new entries for loss_pause_hours after the last loss.
+    # 0 = off.  Open positions are unaffected; a win resets the count.
+    loss_pause_after: int = 0
+    loss_pause_hours: float = 0.0
 
     @classmethod
     def from_mapping(cls, cfg: Mapping[str, Any] | None) -> PortfolioLimits:
@@ -126,6 +134,21 @@ class PortfolioState:
     peak_equity: float
     positions: tuple[OpenPosition, ...] = ()
     correlations: Mapping[tuple[str, str], float] = field(default_factory=dict)
+    loss_streak: int = 0  # losing trades in a row, most recent closes
+    last_loss_at: datetime | None = None  # when the latest of them closed
+    now: datetime | None = None  # decision time (the bar close)
+
+    def loss_pause_until(self, limits: PortfolioLimits) -> datetime | None:
+        """End of the cooling-off pause, or None when entries are not paused."""
+        if (
+            limits.loss_pause_after <= 0
+            or self.loss_streak < limits.loss_pause_after
+            or self.last_loss_at is None
+            or self.now is None
+        ):
+            return None
+        until = self.last_loss_at + timedelta(hours=limits.loss_pause_hours)
+        return until if self.now < until else None
 
     @property
     def drawdown(self) -> float:
@@ -184,6 +207,10 @@ def admit(
     eps = 1e-9  # 1 - 9000/10000 is 0.0999...98 in floating point
     if dd >= limits.drawdown_halt - eps:
         return [Admission(c, False, f"portfolio_drawdown_halt:{dd:.3f}") for c in ordered]
+    paused_until = state.loss_pause_until(limits)
+    if paused_until is not None:
+        why = f"loss_streak_pause:{state.loss_streak} until {paused_until.isoformat()}"
+        return [Admission(c, False, why) for c in ordered]
     risk_fraction = limits.risk_per_trade * (
         limits.drawdown_risk_scale if dd >= limits.drawdown_reduce - eps else 1.0
     )
@@ -255,6 +282,7 @@ def exposure_summary(state: PortfolioState, limits: PortfolioLimits) -> dict[str
     """Numbers the control room and the session report show."""
     equity = state.equity or 1.0
     legs = [(p.symbol, p.sign * p.risk) for p in state.positions]
+    paused = state.loss_pause_until(limits)
     return {
         "equity": state.equity,
         "peak_equity": state.peak_equity,
@@ -265,8 +293,10 @@ def exposure_summary(state: PortfolioState, limits: PortfolioLimits) -> dict[str
         "gross_leverage": round(sum(p.notional for p in state.positions) / equity, 4),
         "net_long_notional": round(sum(p.sign * p.notional for p in state.positions), 2),
         "limits": limits.to_dict(),
-        "entries_allowed": state.drawdown < limits.drawdown_halt - 1e-9,
+        "entries_allowed": state.drawdown < limits.drawdown_halt - 1e-9 and paused is None,
         "risk_scaled": state.drawdown >= limits.drawdown_reduce - 1e-9,
+        "loss_streak": state.loss_streak,
+        "loss_pause_until": None if paused is None else paused.isoformat(),
     }
 
 

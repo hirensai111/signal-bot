@@ -22,9 +22,16 @@ class TelegramNotifier:
         self,
         bot_token: str | None = None,
         chat_id: str | None = None,
+        label: str | None = None,
+        commands: bool | None = None,
     ) -> None:
         self.bot_token = bot_token or settings.telegram_bot_token
         self.chat_id = chat_id or settings.telegram_chat_id
+        # Several bots can share one Telegram bot and chat: each message is prefixed with
+        # the bot's label, and only one of them may answer commands (Telegram allows a
+        # single getUpdates poller per token).
+        self.label = settings.bot_label if label is None else label
+        self.commands = settings.telegram_commands if commands is None else commands
         if not self.bot_token:
             logger.warning("TELEGRAM_BOT_TOKEN is not set.")
         self.application = (
@@ -35,8 +42,11 @@ class TelegramNotifier:
         if not self.application:
             logger.error("Cannot start Telegram bot: no token.")
             return
-        self.application.add_handler(CommandHandler("status", self._cmd_status))
         await self.application.initialize()
+        if not self.commands:
+            logger.info("Telegram: send-only (TELEGRAM_COMMANDS=false); not polling for commands.")
+            return
+        self.application.add_handler(CommandHandler("status", self._cmd_status))
         await self.application.start()
         await self.application.updater.start_polling(drop_pending_updates=True)
         logger.info("Telegram bot polling started.")
@@ -44,22 +54,26 @@ class TelegramNotifier:
     async def stop(self) -> None:
         if not self.application:
             return
-        await self.application.updater.stop()
-        await self.application.stop()
+        if self.commands:
+            await self.application.updater.stop()
+            await self.application.stop()
         await self.application.shutdown()
+
+    def _labelled(self, text: str) -> str:
+        return f"[{self.label}] {text}" if self.label else text
 
     async def send_text(self, text: str) -> None:
         """Plain-text operational alert (no Markdown parsing, so no escaping issues)."""
         if not self.chat_id or not self.application:
             logger.debug("Telegram not configured; alert not sent: %s", text)
             return
-        await self.application.bot.send_message(chat_id=self.chat_id, text=text)
+        await self.application.bot.send_message(chat_id=self.chat_id, text=self._labelled(text))
 
     async def notify_signal(self, signal: Signal) -> None:
         if not self.chat_id or not self.application:
             logger.debug("Telegram not configured; skipping signal notification.")
             return
-        text = self._format_signal(signal)
+        text = self._labelled(self._format_signal(signal))
         escaped = escape_markdown(text, version=2)
         try:
             await self.application.bot.send_message(
@@ -73,7 +87,7 @@ class TelegramNotifier:
     async def notify_outcome(self, signal: Signal, outcome: SignalOutcome) -> None:
         if not self.chat_id or not self.application:
             return
-        text = self._format_outcome(signal, outcome)
+        text = self._labelled(self._format_outcome(signal, outcome))
         escaped = escape_markdown(text, version=2)
         try:
             await self.application.bot.send_message(
@@ -110,7 +124,8 @@ class TelegramNotifier:
             lines.append(f"Target:   {signal.take_profit}   ({tp_pct:+.2f}%)")
         else:
             rr = None
-            lines.append("Target:   none (trailing stop)")
+            trailing = getattr(signal, "trail_distance", None)
+            lines.append("Target:   none (trailing stop)" if trailing else "Target:   none")
         if getattr(signal, "trail_distance", None):
             trail_pct = float(signal.trail_distance) / entry_f * 100
             lines.append(

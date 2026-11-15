@@ -3,6 +3,9 @@
     docker compose exec bot python -m signal_bot.ops.soak --prometheus http://prometheus:9090 --days 14
     # from the host (ports are bound to localhost):
     python -m signal_bot.ops.soak --prometheus http://127.0.0.1:9090 --days 7 --markdown soak.md
+    # the second paper bot (compose profile "tp"):
+    docker compose --profile tp exec bot-tp python -m signal_bot.ops.soak \
+        --prometheus http://prometheus:9090 --instance bot-tp:8080
 
 It reads Prometheus (and, with --database-url or DATABASE_URL, the trade tables) and
 checks the operational pass criteria in docs/deployment.md.  It also prints the
@@ -19,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -35,12 +39,37 @@ class Criterion:
     detail: str
 
 
+_BOT_SERIES = re.compile(r"\b(up|(?:signalbot|process)_[a-z0-9_]+)(\{)?")
+
+
+def for_instance(expr: str, instance: str | None) -> str:
+    """Restrict every bot series in *expr* to one bot (two paper bots may run side by side).
+
+    Backup metrics come from node-exporter, not a bot, and are left alone.
+    """
+    if not instance:
+        return expr
+    sel = f'instance="{instance}"'
+
+    def add(m: re.Match) -> str:
+        name, brace = m.group(1), m.group(2)
+        if name.startswith("signalbot_backup_"):
+            return m.group(0)
+        return f"{name}{{{sel}, " if brace else f"{name}{{{sel}}}"
+
+    return _BOT_SERIES.sub(add, expr)
+
+
 class Prom:
-    def __init__(self, base: str, session: aiohttp.ClientSession) -> None:
+    def __init__(
+        self, base: str, session: aiohttp.ClientSession, instance: str | None = None
+    ) -> None:
         self.base = base.rstrip("/")
         self.session = session
+        self.instance = instance
 
     async def query(self, expr: str) -> list[dict[str, Any]]:
+        expr = for_instance(expr, self.instance)
         async with self.session.get(f"{self.base}/api/v1/query", params={"query": expr}) as resp:
             body = await resp.json()
         if body.get("status") != "success":
@@ -265,9 +294,12 @@ def render(crit: list[Criterion], facts: dict[str, Any], days: int) -> str:
     return "\n".join(lines)
 
 
-async def run(prometheus: str, days: int, database_url: str | None) -> tuple[str, bool]:
+async def run(
+    prometheus: str, days: int, database_url: str | None, instance: str | None = "bot:8080"
+) -> tuple[str, bool]:
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-        crit, facts = await collect(Prom(prometheus, session), days)
+        crit, facts = await collect(Prom(prometheus, session, instance), days)
+    facts = {"bot": instance or "all", **facts}
     if database_url:
         try:
             facts.update(await trading_facts(database_url, days))
@@ -282,10 +314,17 @@ def main() -> int:
     )
     ap.add_argument("--prometheus", default="http://127.0.0.1:9090")
     ap.add_argument("--days", type=int, default=14)
+    ap.add_argument(
+        "--instance",
+        default="bot:8080",
+        help="which paper bot (bot:8080 = main, bot-tp:8080 = second bot; '' = no filter)",
+    )
     ap.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
     ap.add_argument("--markdown", help="also write the report to this file")
     args = ap.parse_args()
-    report, ok = asyncio.run(run(args.prometheus, args.days, args.database_url))
+    report, ok = asyncio.run(
+        run(args.prometheus, args.days, args.database_url, args.instance or None)
+    )
     print(report)
     if args.markdown:
         with open(args.markdown, "w") as fh:

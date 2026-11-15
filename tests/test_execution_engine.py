@@ -55,11 +55,24 @@ async def test_long_bracket_translated_with_basis_and_rounded(h):
     assert order.intended_entry == Decimal("65020")
     assert order.stop_loss_price == Decimal("64019.5")  # 64000.1 + 19.55 basis -> tick
     assert order.take_profit_price == Decimal("67020")
-    assert order.limit_price == Decimal("65020.5")  # best ask + 1 tick (IOC)
+    # IOC limit: best ask + 10 bps, rounded up to the tick (65020 * 1.001 = 65085.02)
+    assert order.limit_price == Decimal("65085.5")
     assert order.state == S.FILLED
     assert order.protective_status == "confirmed"
     pos = h.venue.position("BTCUSD")
     assert pos.has_stop_loss and pos.stop_loss_price == Decimal("64019.5")
+
+
+async def test_fixed_target_without_trail_is_a_plain_bracket(h):
+    """The +1.5R variant: bracket with stop and target, no trailing state on the order."""
+    sig = await h.make_signal(entry="65000", stop="64000", tp="66500")  # no trail_distance
+    await h.submit(sig)
+    order = await h.order_for(sig)
+    assert order.state == S.FILLED and order.protective_status == "confirmed"
+    assert order.trail_mode in (None, "none") and not order.trail_distance
+    assert order.take_profit_price is not None and order.take_profit_price > order.intended_entry
+    pos = h.venue.position("BTCUSD")
+    assert pos.has_stop_loss and pos.take_profit_price == order.take_profit_price
 
 
 async def test_short_bracket(h):
@@ -67,9 +80,23 @@ async def test_short_bracket(h):
     await h.submit(sig)
     order = await h.order_for(sig)
     assert order.side == "sell"
-    assert order.limit_price == Decimal("64999")  # best bid - 1 tick
+    assert order.limit_price < order.intended_entry  # best bid - 10 bps, rounded down
     assert order.state == S.FILLED
     assert h.venue.position("BTCUSD").size == -order.filled_size
+
+
+def test_entry_limit_allows_slippage_but_at_least_one_tick():
+    limit = ExecutionEngine.entry_limit_price
+    tick = Decimal("0.5")
+    bid, ask = Decimal("64999.5"), Decimal("65000")
+    assert limit("buy", bid, ask, tick, Decimal("10")) == Decimal("65065")  # 65065.0 exactly
+    assert limit("sell", bid, ask, tick, Decimal("10")) == Decimal("64934.5")  # 64934.4995 down
+    # 0 bps (or a tick wider than the allowance) still crosses the touch by one tick
+    assert limit("buy", bid, ask, tick, Decimal("0")) == Decimal("65000.5")
+    assert limit("sell", bid, ask, tick, Decimal("0")) == Decimal("64999")
+    assert limit(
+        "buy", Decimal("0.0701"), Decimal("0.0702"), Decimal("0.0001"), Decimal("1")
+    ) == Decimal("0.0703")
 
 
 async def test_fill_mirrors_execution_details_onto_signal(h):

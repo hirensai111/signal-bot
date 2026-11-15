@@ -28,3 +28,6 @@ replay-*/
 
 # deployment backups (deploy/backup/backup.sh)
 /backups/
+
+# written by deploy/update.sh and the fork scripts on the server
+/deploy-history.log

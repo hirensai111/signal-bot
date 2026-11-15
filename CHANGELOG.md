@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.4.0
+
+A third paper bot to forward-test two account rules on the second bot's strategy.
+
+### Added
+- **Cooling-off pause** (portfolio rule 9, off by default): `loss_pause_after` losing
+  trades in a row stop new entries for `loss_pause_hours` after the latest loss. Open
+  positions are still managed. Research and live share the rule in `risk/portfolio.py`;
+  the live bot counts from its own `trade_results`.
+- **`trend_portfolio_tp15_pause`:** the second bot's strategy with
+  `max_correlated_risk = 0.05` and a 48-hour pause after 5 losses in a row
+  (docs/research.md, *Cooling-off pause*).
+- **Third paper bot (`bot-tp2`, compose profile `tp2`):** database `signal_bot_tp2`,
+  volume `botdata-tp2`, control room on 127.0.0.1:8082, Telegram tag `[TP 1.5R + pause]`.
+  Prometheus, Grafana selectors, alerts, Loki, backups, restore and `deploy/update.sh`
+  include it.
+- **`deploy/fork-paper-tp2.sh`:** first launch as an exact copy of the second bot's
+  database and paper checkpoint, so both continue from the same trades and balance.
+- **Control room:** the *Portfolio* panel shows the losing streak and the pause.
+
+## 2.3.0
+
+A second paper bot to forward-test a fixed +1.5R exit next to the unchanged strategy,
+and an entry fix found in the first week of paper trading.
+
+### Added
+- **Fixed take-profit for the trend strategy.** `take_profit_r` (default 0 = off) puts a
+  target at entry +/- that many R; `trail_atr = 0` turns trailing off. Research and live
+  share the setting through `signals/trend.py`, so replay parity holds. The main bot's
+  config is unchanged.
+- **`trend_breakout_tp15` / `trend_portfolio_tp15`:** the same entries and portfolio
+  rules with a 2 ATR fixed stop and a +1.5R target (docs/research.md, *Exit variants*).
+- **Second paper bot (`bot-tp`, compose profile `tp`):** its own $10k account, database
+  `signal_bot_tp`, state volume and control room on 127.0.0.1:8081. Enabled with
+  `COMPOSE_PROFILES=tp` in `.env`. Prometheus discovers it by name; Grafana dashboards
+  get a **Bot** selector (and a **Trade database** selector for the SQL panels); alerts
+  are evaluated per bot; backups and `deploy/restore.sh` cover both;
+  `signal_bot.ops.soak --instance` picks a bot.
+- **Telegram:** `BOT_LABEL` prefixes every message; `TELEGRAM_COMMANDS=false` makes a bot
+  send-only (one command listener per Telegram token).
+- **Control room:** a *Target* column in *Stops and exits*.
+
+### Fixed
+- **Entries no longer miss fast breakouts.** The IOC entry was priced one tick through
+  the touch, so a book that moved in the ~0.2 s before matching left it unfilled
+  (`ioc_no_liquidity` on an ETH entry in the first week). It may now fill up to
+  `ENTRY_LIMIT_SLIPPAGE_BPS` (10) beyond the touch, which with the 0.15% basis gate stays
+  inside the research model's 30 bps entry tolerance.
+- **Prices display at full precision** in the control room (DOGE showed 0.07, XRP 1.11).
+- **Alert rules that aggregated across bots** (no ready symbol, stale 4h candles, market
+  data age, event backlog) are now per instance, and `BotDown` only mutes its own bot's
+  alerts.
+
+
 ## 2.2.0
 
 Always-on paper deployment with monitoring (`docs/deployment.md`).

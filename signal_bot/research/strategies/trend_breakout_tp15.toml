@@ -1,0 +1,44 @@
+# Variant of trend_breakout 0.2.0 for a parallel paper forward test: the same entries,
+# but a fixed +1.5R take-profit and a fixed 2 ATR stop instead of the 3 ATR trailing stop.
+# Picked from a post-holdout comparison (variant C in docs/research.md, "Exit variants"),
+# so it has no clean out-of-sample result: only the forward test can judge it.
+name = "trend_breakout_tp15"
+version = "0.1.0"
+strategy = "trend_breakout"
+description = "trend_breakout 0.2.0 entries (4h Donchian 55 breakout, EMA200 direction, volume >= 1.5x) with a fixed exit: 2 ATR stop, take profit at +1.5R, no trailing, 30-day time stop."
+
+[params]
+timeframe = "4h"
+entry_lookback = 55
+atr_n = 20
+stop_atr = 2.0
+trail_atr = 0.0  # no trailing: the stop stays at the initial 2 ATR
+trend_ema = 200
+breakout_volume_mult = 1.5
+allow_short = true
+max_hold_bars = 180
+min_stop_bps = 0.0
+take_profit_r = 1.5
+
+[costs]
+taker_fee = 0.0005
+maker_fee = 0.0002
+half_spread_bps = 1.0
+impact_coef = 0.5
+max_participation = 0.05
+max_entry_slippage_bps = 30.0
+funding_rate_8h = 0.0001
+
+[sizing]
+initial_equity = 10000.0
+risk_fraction = 0.005
+max_leverage = 5.0
+
+[validation]
+oos_fraction = 0.33
+walk_forward_train_days = 365
+walk_forward_test_days = 90
+cost_multipliers = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
+random_baseline_runs = 50
+seed = 20261101
+min_oos_trades = 30

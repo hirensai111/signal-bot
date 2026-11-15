@@ -336,6 +336,7 @@ class TrendBreakout:
     allow_short: bool = True
     max_hold_bars: int = 180
     min_stop_bps: float = 0.0
+    take_profit_r: float = 0.0  # 0 = no fixed target (the researched 0.2.0 exit)
     name: str = "trend_breakout"
     version: str = "0.1.0"
 
@@ -353,6 +354,7 @@ class TrendBreakout:
                 "allow_short",
                 "max_hold_bars",
                 "min_stop_bps",
+                "take_profit_r",
             )
         }
 
@@ -370,7 +372,9 @@ class TrendBreakout:
                 d.side,
                 d.entry,
                 d.stop,
-                NO_TARGET if d.side == "long" else -NO_TARGET,
+                d.take_profit
+                if d.take_profit is not None
+                else (NO_TARGET if d.side == "long" else -NO_TARGET),
                 d.max_hold_bars,
                 "breakout",
                 d.trail_distance,

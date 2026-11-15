@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # Shown as "[label] " before every Telegram message (set when several bots share a chat).
+    bot_label: str = ""
+    # Answer Telegram commands (/status).  Only one bot per Telegram token may do this.
+    telegram_commands: bool = True
 
     # Risk defaults
     account_size_usdt: float = 10000.0
@@ -75,6 +79,8 @@ class Settings(BaseSettings):
     # Deployment lock: a paper-only deployment refuses to start with EXEC_MODE=live.
     paper_only: bool = False
     order_type: str = "limit_ioc"
+    # How far past the best price an IOC entry may fill (basis points).  0 = one tick.
+    entry_limit_slippage_bps: float = 10.0
     no_fill_timeout_seconds: float = 60.0
     max_candle_lag_seconds: float = 90.0
     max_book_age_seconds: float = 10.0
