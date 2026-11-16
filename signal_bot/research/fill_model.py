@@ -252,11 +252,9 @@ def step_trade(ot: OpenTrade, bars: _Bars, k: int, cost: CostModel) -> bool:
     ot.k = k
     if k > j and _crosses_funding(idx[k - 1], idx[k]):
         ot.funding -= sign * ot.fill_qty * o[k] * cost.funding_rate_8h
-    if it.trail_distance and k > j:
-        # Stepped trail: updated once per bar from extremes through bar k-1.
-        ot.best = max(ot.best, h[k - 1]) if long else min(ot.best, lo[k - 1])
-        trailed = ot.best - it.trail_distance if long else ot.best + it.trail_distance
-        ot.stop = max(ot.stop, trailed) if long else min(ot.stop, trailed)
+    if k > j:
+        # Stepped trail: the stop used on bar k reflects extremes through bar k-1.
+        ratchet_trail(ot, bars, k - 1)
     stop = ot.stop
     stop_hit = (lo[k] <= stop) if long else (h[k] >= stop)
     tp_hit = (h[k] >= it.take_profit) if long else (lo[k] <= it.take_profit)
@@ -290,6 +288,26 @@ def step_trade(ot: OpenTrade, bars: _Bars, k: int, cost: CostModel) -> bool:
         _close(ot, bars, k, exit_px, "time")
         return True
     return False
+
+
+def ratchet_trail(ot: OpenTrade, bars: _Bars, k: int) -> None:
+    """Fold bar *k*'s extreme into the stepped trailing stop (the stop used from bar k+1).
+
+    Idempotent: ``step_trade`` applies it for bar k-1 at the start of bar k, so calling
+    it again right after bar *k* has been stepped changes when the ratchet becomes
+    visible (at bar k's close, as the live trailing manager does), never which stop a
+    later bar uses.  The portfolio simulator relies on this to see the same open risk
+    as live admission without changing any exit.
+    """
+    it = ot.intent
+    if not it.trail_distance or k < ot.j or ot.closed:
+        return
+    if ot.long:
+        ot.best = max(ot.best, bars.h[k])
+        ot.stop = max(ot.stop, ot.best - it.trail_distance)
+    else:
+        ot.best = min(ot.best, bars.lo[k])
+        ot.stop = min(ot.stop, ot.best + it.trail_distance)
 
 
 def _close(ot: OpenTrade, bars: _Bars, k: int, exit_px: float, reason: str) -> None:

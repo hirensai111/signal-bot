@@ -17,9 +17,17 @@ timeline and, at every bar close, applies exactly what live trading applies:
   listed it.
 
 Order of operations at each bar close *t*, identical to the live pipeline:
-open positions are stepped through bar *t* (exits, trail ratchet, time stops),
+open positions are stepped through bar *t* (exits, time stops), the trailing
+stop of every position still open is ratcheted with bar *t*'s high/low (live:
+``TrailingStopManager.on_bar_close`` runs before the bar's batch is decided),
 equity is marked to the close, then that bar's decisions are ranked and
-admitted, and accepted trades enter at the next bar's open.
+admitted against those current stops, and accepted trades enter at the next
+bar's open.  The ratchet only makes bar *t*'s stop visible at *t*'s close;
+``step_trade`` would apply the same stop from bar *t+1*, so exits are unchanged.
+
+Before November 2026 the ratchet pass was missing: admission saw stops that
+lagged one bar, so open and correlated risk of trailing winners were overstated
+(docs/research.md, *Portfolio results*).
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ from signal_bot.research.fill_model import (
     Trade,
     _Bars,
     open_trade,
+    ratchet_trail,
     step_trade,
 )
 from signal_bot.research.strategies import frame_for
@@ -219,7 +228,7 @@ def run_portfolio(
         if t >= t_end:
             break
         live = t >= t_start
-        # 1. step open positions through bar t
+        # 1. step open positions through bar t, then ratchet trails with its extremes
         busy: set[str] = set()
         for name, ot in list(open_.items()):
             s = symbols[name]
@@ -237,6 +246,9 @@ def run_portfolio(
                     last_loss_at = t + bar  # known at this bar's close
                 else:
                     loss_streak = 0
+            else:
+                # live ratchets at the bar close, before the batch is admitted
+                ratchet_trail(ot, s.bars, k)
         if not live:
             continue
         # 2. mark to market at the close of t

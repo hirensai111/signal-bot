@@ -137,3 +137,108 @@ def test_portfolio_evaluation_is_deterministic(tmp_path):
         "not_validated",
     )
     assert summarize(run_portfolio(cfg, sets), 10_000)["trades"] == x["summary"]["trades"]
+
+
+# ---------------------------------------------------------------------------
+# order of operations at a bar close: trail ratchet before admission (as live)
+# ---------------------------------------------------------------------------
+
+
+def test_bar_close_ratchet_leaves_every_exit_unchanged(tmp_path):
+    """The ratchet pass only makes a stop visible earlier: re-stepping each trade with the
+    plain fill model (the pre-fix engine) gives the same exit bar, price and reason."""
+    from signal_bot.research.fill_model import _Bars, open_trade, step_trade
+    from signal_bot.research.portfolio import NO_TARGET, Intent
+
+    cfg = cfg_with_universe(tmp_path, ["AAAUSDT"])
+    ds = data("AAAUSDT", 3, bars=16000)
+    run = run_portfolio(cfg, [ds])
+    bars = _Bars.of(ds.frame)
+    cost = CostModel(**cfg["costs"])
+    pos = {t: n for n, t in enumerate(ds.frame.index)}
+    params = cfg["params"]
+    filled = [t for t in run.trades if t.filled]
+    trailed = [t for t in filled if t.exit_reason == "trail"]
+    assert len(filled) >= 10 and trailed
+    for t in filled:
+        it = Intent(
+            pos[t.signal_time],
+            t.side,
+            t.intended_entry,
+            t.stop,
+            NO_TARGET if t.side == "long" else -NO_TARGET,
+            params["max_hold_bars"],
+            "breakout",
+            t.trail_distance,
+        )
+        ref, ot = open_trade(bars, it.bar, it, t.qty_requested, cost, t.symbol)
+        k = ot.j
+        while not step_trade(ot, bars, k, cost):
+            k += 1
+        assert (t.exit_time, t.exit_price, t.exit_reason) == (
+            ref.exit_time,
+            ref.exit_price,
+            ref.exit_reason,
+        )
+        assert t.net_pnl == ref.net_pnl
+
+
+def _bars(rows, start="2025-01-01"):
+    idx = pd.date_range(start, periods=len(rows), freq="4h", tz="UTC")
+    frame = pd.DataFrame(rows, columns=["open", "high", "low", "close"], index=idx, dtype=float)
+    frame["volume"] = 1e9
+    frame["quote_volume"] = 1e12
+    return frame
+
+
+def test_bar_close_ratchet_frees_open_risk_for_the_same_close(tmp_path):
+    """A trailing long whose bar-t high tightens its stop must free open-risk headroom
+    for a candidate decided at that same close, as live (trail amend, then admit)."""
+    from signal_bot.research.fill_model import _Bars
+    from signal_bot.research.portfolio import _Decision
+
+    n = 30
+    # A: long decided at bar 5 (entry 100, stop 98, 3-point trail), enters at bar 6.
+    # Flat until bar 20, whose high of 110 trails the stop to 107; it holds above after.
+    rows_a = [(100, 100.5, 99.5, 100)] * 20 + [(100, 110, 100, 109.5)] + [(109.5, 110, 109, 109.5)] * (n - 21)
+    # B: long decided at bar 20 (entry 50, stop 49).
+    rows_b = [(50, 50.2, 49.8, 50)] * n
+    fa, fb = _bars(rows_a), _bars(rows_b)
+    decisions = {
+        "AAAUSDT": {5: _Decision(5, "long", 100.0, 98.0, 3.0, 1.0, 180)},
+        "BBBUSDT": {20: _Decision(20, "long", 50.0, 49.0, 3.0, 1.0, 180)},
+    }
+    cfg = cfg_with_universe(tmp_path, ["AAAUSDT", "BBBUSDT"])
+    sets = [
+        Dataset("AAAUSDT", "4h", fa, "synthetic", True),
+        Dataset("BBBUSDT", "4h", fb, "synthetic", True),
+    ]
+    cache = {
+        ("frame", ds.symbol, ds.snapshot_id): (
+            ds.frame,
+            _Bars.of(ds.frame),
+            {t: i for i, t in enumerate(ds.frame.index)},
+            decisions[ds.symbol],
+        )
+        for ds in sets
+    }
+    # A risks 0.5% at entry.  At bar 20's close (mark 109.5) its open risk is
+    # 25 x (109.5 - 98) = 2.9% with the stale stop, 25 x (109.5 - 107) = 0.6% with
+    # the ratcheted one; B adds 0.5%.  A 2% cap separates the two orderings.
+    limits = PortfolioLimits(
+        risk_per_trade=0.005,
+        max_positions=10,
+        max_open_risk=0.02,
+        max_correlated_risk=1.0,
+        max_gross_leverage=100.0,
+        max_entries_per_bar=10,
+        drawdown_reduce=1.0,
+        drawdown_halt=1.0,
+        position_leverage=1,
+    )
+    run = run_portfolio(cfg, sets, limits=limits, respect_listing=False, _cache=cache)
+    a = next(t for t in run.trades if t.symbol == "AAAUSDT")
+    assert a.filled and a.exit_reason == "time"  # never stopped: same exit either way
+    b = [t for t in run.trades if t.symbol == "BBBUSDT"]
+    assert run.refusals.get("max_open_risk", 0) == 0
+    assert len(b) == 1 and b[0].filled and b[0].signal_time == fa.index[20]
