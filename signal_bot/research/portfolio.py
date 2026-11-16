@@ -503,6 +503,8 @@ def evaluate_portfolio(
         if rets
         else None
     )
+    # the configured entry halt, not a fixed 20%: a config with doubled rules halts at 40%
+    halt = round(PortfolioLimits.from_mapping(cfg.get("portfolio")).drawdown_halt * 100, 6)
     criteria = [
         {"name": "At least 30 trades", "passed": summary["trades"] >= 30},
         {
@@ -525,8 +527,9 @@ def evaluate_portfolio(
             "passed": pct is not None and pct >= 95,
         },
         {
-            "name": "Max drawdown within the 20% halt level",
-            "passed": summary["max_drawdown_pct"] is not None and summary["max_drawdown_pct"] > -20,
+            "name": f"Max drawdown within the {halt:g}% halt level",
+            "passed": summary["max_drawdown_pct"] is not None
+            and summary["max_drawdown_pct"] > -halt,
         },
     ]
     return {

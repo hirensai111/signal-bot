@@ -186,6 +186,20 @@ def test_portfolio_sees_trailing_stops_moved_with_the_decision_bar(tmp_path, mon
     assert checked >= 10 and moved >= 1, (checked, moved)  # the decision bar moved stops
 
 
+def test_drawdown_criterion_uses_the_configured_halt(tmp_path):
+    # a config with every rule doubled halts at 40%; judging it against 20% fails it wrongly
+    sets = [data("AAAUSDT", 3, 6000), data("BBBUSDT", 4, 6000)]
+    for halt, label in ((None, "20%"), (0.4, "40%")):
+        cfg = cfg_with_universe(tmp_path, ["AAAUSDT", "BBBUSDT"])
+        if halt is not None:
+            cfg["portfolio"] = {**cfg["portfolio"], "drawdown_halt": halt}
+        x = evaluate_portfolio(cfg, sets, random_runs=2)
+        (c,) = [c for c in x["criteria"] if c["name"].startswith("Max drawdown within")]
+        assert c["name"] == f"Max drawdown within the {label} halt level"
+        limit = -(halt or 0.2) * 100
+        assert c["passed"] == (x["summary"]["max_drawdown_pct"] > limit)
+
+
 def test_portfolio_criteria_are_json_booleans(tmp_path):
     # numpy.bool_ would be written as the string "False" by json.dumps(default=str),
     # and the string reads as true to anything that checks it by truthiness
