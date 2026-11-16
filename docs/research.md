@@ -401,5 +401,168 @@ rule 9) counts consecutive closed trades with net P&L <= 0 and refuses new entri
 48 hours after the latest of them; research counts from the simulated closes and the live
 bot from its own `trade_results`. The repository's research runner reproduces the variant
 from that config (1342 trades, +18.3%/yr, max DD -10.8%; holdout 289 trades, +4.4%,
--15.3%); the small difference from the table is the stop-timing order the runner still
-uses.
+-15.3%); the small difference from the table is that the table replayed exits on
+5-minute candles, while the runner steps whole 4h bars.
+
+### The three paper bots (official reports, 16 November 2026)
+
+All three bots trade the same frozen breakout entries on the same 11 Delta perpetuals with
+0.5% risk per trade, $10,000 and the same portfolio rules, except where noted:
+
+| Bot | Config (hash) | Exit | Account rules that differ |
+|---|---|---|---|
+| 1. Main | `trend_portfolio.toml` (`875c2500…`) | 2 ATR stop, 3 ATR trailing stop, no target | – |
+| 2. +1.5R | `trend_portfolio_tp15.toml` (`f1999311…`) | Fixed 2 ATR stop, +1.5R target | – |
+| 3. +1.5R + pause | `trend_portfolio_tp15_pause.toml` (`6318e58e…`) | Same as bot 2 | Correlated risk 5% (not 2%); 48 h pause after 5 losses in a row |
+
+Each was run through `scripts/research_portfolio.py` (6 criteria, cost sensitivity,
+90-day windows, 50 random-entry portfolios). Bot 1's reports were regenerated at `bcbaaa0`
+after the stop-timing correction; bots 2 and 3 at `39a0821`. Bots 2 and 3 were chosen
+**after** the holdout year had been seen, so their holdout runs (logged looks 5 and 6) are
+in-sample.
+
+| Bot | Period | Return | Per year | Max DD | Trades | Wins | R per trade (95% CI) | 90-day windows >= 0 | Random pct | Verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Main | Development (Delta dates) | +38.0% | +19.8% | -8.1% | 380 | 40% | +0.19 (+0.03 to +0.34) | 71% | 94 | Not validated (random) |
+| Main | 2021-2025, all coins | +53.6% | +9.5% | -16.7% | 1199 | 38% | +0.11 (+0.03 to +0.20) | 63% | 100 | Validated candidate |
+| Main | Holdout | +14.8% | +14.9% | -16.6% | 261 | 36% | +0.16 (-0.05 to +0.36) | 75% | 98 | Validated candidate |
+| +1.5R | Development | +35.7% | +18.6% | -9.8% | 440 | 47% | +0.15 (+0.03 to +0.27) | 71% | 100 | Validated candidate |
+| +1.5R | 2021-2025, all coins | +50.9% | +9.1% | -15.8% | 1390 | 45% | +0.09 (+0.03 to +0.16) | 58% | 100 | Not validated (windows) |
+| +1.5R | Holdout | +4.4% | +4.5% | -17.4% | 312 | 43% | +0.04 (-0.10 to +0.18) | 50% | 74 | Not validated (windows, random) |
+| Pause | Development | +37.9% | +19.7% | -10.8% | 451 | 47% | +0.16 (+0.04 to +0.27) | 86% | 100 | Validated candidate |
+| Pause | 2021-2025, all coins | +121.5% | +18.3% | -10.8% | 1342 | 46% | +0.13 (+0.06 to +0.20) | 79% | 100 | Validated candidate |
+| Pause | Holdout | +4.4% | +4.4% | -15.3% | 289 | 44% | +0.06 (-0.08 to +0.21) | 75% | 76 | Not validated (random) |
+
+Costs: at 3x costs bot 1 still made +19.0% (development) and +10.5% (holdout); bot 2
++18.9% and -0.8%; bot 3 +8.6% and 0.0%.
+
+Lowest balance from $10,000 and the largest fall from a peak, in dollars:
+
+| Bot | Holdout | Development | 2021-2025 |
+|---|---|---|---|
+| Main | $10,000 (never below); -$2,139 | $9,801; -$1,148 | $9,669; -$1,934 |
+| +1.5R | $9,912; -$2,093 | $9,938; -$1,259 | $9,818; -$2,023 |
+| Pause | $9,797; -$1,767 | $9,938; -$1,294 | $9,818; -$2,091 |
+
+What it shows:
+
+* **In the holdout year the main bot is far ahead** (+14.8% vs +4.4% and +4.4%); on
+  development data all three are level (+36% to +38%). The main bot is the only one whose
+  rules were fixed before the holdout was run.
+* **Bot 3's long view (+121.5%) comes mostly from 2021-2022**, the years in which every
+  coin is treated as listed; its looser correlation limit lets it hold more same-direction
+  trades in those big trends. Delta-listed periods show no gain over bot 2.
+* **No bot fell more than $331 below its starting balance**, but each gave back about
+  $1,800-2,100 from a high at least once. A bad stretch at the very start would take the
+  account to about $8,000.
+
+### Account size, risk and leverage (November 2026, after the holdout)
+
+Questions from forward testing, answered with `research/portfolio.py` at the corrected
+timing. Run with in-memory variants of the configs above (scratch scripts, not in the
+repository). Every result is in-sample.
+
+**Margin actually used.** Across all bots and periods, margin locked at 5x averaged
+$360-440 (3-4% of the account) and peaked at $2,000-3,250 (17-22%); bot 3 peaked at $4,058.
+The bots were flat 25-35% of the time and held 1.5-1.8 positions on average.
+
+**Leverage (`position_leverage`).** Risk per trade fixes the position size, so leverage
+only changes margin and how close liquidation is. Higher leverage refuses more trades
+whose stop is beyond half the distance to liquidation:
+
+| Bot | Period | 5x (today) | 7x | 10x |
+|---|---|---|---|---|
+| Main | Holdout / development / 2021-2025 | +14.8% / +38.0% / +53.6% | +13.8% / +28.6% / +56.8% | +5.1% / +17.2% / +70.7% |
+| +1.5R | Holdout / development / 2021-2025 | +4.4% / +35.7% / +50.9% | +5.8% / +29.4% / +68.2% | +0.7% / +24.8% / +52.5% |
+
+On Delta-listed data higher leverage lowers returns; the 2021-2022 gain at 10x is from
+skipping wide-stop trades in an unusually volatile market. Lifting the 3x gross-notional
+cap changes nothing: peak gross leverage was about 1.1x.
+
+**Risk per trade.** On $10,000:
+
+| Bot | Period | 0.5% (today) | 1%, other limits unchanged | 1%, every rule doubled (6% / 4% risk caps, halve at 20%, halt at 40%) |
+|---|---|---|---|---|
+| Main | Holdout | +14.8%, DD -16.6% | +5.4%, **halted** | +29.0%, DD -31.5% |
+| Main | Development | +38.0%, -8.1% | +25.5%, -14.1% | +77.6%, -16.8% |
+| Main | 2021-2025 | +53.6%, -16.7% | +50.5%, -19.5% | +101.7%, -34.8% |
+| +1.5R | Holdout | +4.4%, -17.4% | +0.4%, **halted** | +6.6%, -32.9% |
+| +1.5R | Development | +35.7%, -9.8% | +35.1%, -11.6% | +82.5%, -19.2% |
+| +1.5R | 2021-2025 | +50.9%, -15.8% | +55.0%, -16.9% | +161.7%, -25.8% |
+| Pause | Holdout | +4.4%, -15.3% | – | +11.9%, -29.3% |
+| Pause | Development | +37.9%, -10.8% | – | +86.4%, -20.7% |
+| Pause | 2021-2025 | +121.5%, -10.8% | – | +367.8%, -20.9% |
+
+* 1% with today's limits leaves room for only about three positions and hits the 20% halt.
+* 1% with every rule doubled roughly doubles both profit and drawdown and never reached the
+  40% halt. Drawdowns of -30% to -35% are the price; a future drawdown twice as deep would
+  stop the bot at 40%.
+* Removing the 20% halt at 0.5% changes nothing: no run at 0.5% came near it.
+
+**Smaller account, same dollar trades.** Scaling every percentage rule by 10,000 / account
+keeps each trade at about $50. Profit in dollars stays close, but not equal: risk is a
+percentage of the current balance, the drawdown brakes are measured from the peak, and
+whole-contract rounding admits different trades.
+
+| Bot | $10,000 at 0.5% | $7,000, rules x10/7 | $5,000, rules x2 |
+|---|---|---|---|
+| Main (holdout / development / 2021-2025) | +$1,480 / +$3,801 / +$5,356 | +$1,396 / +$4,435 / +$3,018 | +$1,510 / +$3,880 / +$5,534 |
+| +1.5R | +$444 / +$3,567 / +$5,087 | +$334 / +$4,395 / +$5,437 | +$349 / +$3,788 / +$5,658 |
+| Pause | +$443 / +$3,793 / +$12,153 | +$319 / +$3,566 / +$14,572 | – |
+
+The main bot's $7,000 long view is lower because its 2022-2023 drawdown went to -26% and
+kept the risk-halving rule on for 41% of the period (21% at $10,000), through the best
+years. Removing the halving rule at $7,000 restored it (+$8,228) but made bot 2 lose $569
+and hit the halt in the holdout; moving it to 20% was worse than both. At $7,000 no bot
+went below $6,501. At 1% with every rule doubled, $7,000 and $10,000 give nearly the same
+percentages (7 of 9 runs within 3 points).
+
+**$1,000.** At 0.5% a trade risks about $5, below one SOL contract (1 SOL, about $6-10 of
+risk at a typical stop), so 27-141 SOL signals per period were skipped (plus some AVAX).
+Returns: main +11.5% / +33.6% / +46.1%, bot 2 +3.1% / +30.5% / +62.0%, bot 3 +6.7% /
++12.5% / +65.9%. At 1% (rules doubled) far fewer were skipped: main +25.4% / +82.9% /
++101.0%. A server costing about $140 a year needs roughly $1,400 at 10% a year to break
+even.
+
+### Exit and timing ideas tested on the main bot (November 2026, after the holdout)
+
+All on the corrected simulator, $10,000, 0.5% risk. Return for holdout / development /
+2021-2025:
+
+| Idea | Holdout | Development | 2021-2025 | Verdict |
+|---|---|---|---|---|
+| **Main bot as deployed** | **+14.8%** | **+38.0%** | **+53.6%** | – |
+| R-ladder exit: no trail; at +1.5R lock +1R, then +1R per further 1R | -1.5% | +15.7% | +37.6% | Worse: 150 full -1R losses vs 94; winners cut at +1R |
+| Trail 1.5 ATR, moved each 4h close | -3.6% | +10.9% | +4.7% | Worse: wins shrink to +0.8R, 33-77% more trades, fees up to nearly double |
+| Trail 1.5 ATR, moved every 5 minutes | -1.5% | +12.6% | -2.1% | Worse |
+| Trail 3 ATR, moved every hour | +17.6% | +33.4% | +53.9% | Mixed |
+| Trail 3 ATR, moved every 5 minutes | +25.9% | +34.3% | +56.8% | Mixed; would need intrabar stop management live |
+| Cooldown per coin after a winning trade, 1 / 3 / 7 / 14 / 30 days | +13.2 / +10.7 / +11.8 / +7.8 / +7.1% | +32.3 / +35.4 / +34.3 / +45.7 / +29.9% | +53.6 / +34.3 / -11.9 (halted) / +33.7 / +50.4% | No length helps consistently |
+| 48 h pause for the whole bot after a win of 2R+ / 3R+ | +13.7 / +12.3% | +27.8 / +35.0% | +26.5 / +35.6% | Worse |
+| 48 h pause for that coin after a win of 2R+ / 3R+ | +14.9 / +14.9% | +27.9 / +29.6% | +31.5 / +50.4% | Worse |
+| Correlated risk 5% | +12.9% | +39.6% | +46.6% | Mixed |
+| 48 h pause after 5 losses in a row | +26.8% | +11.5% | +18.7% | Worse on development data |
+| Both (bot 3's account rules) | +16.4% | +14.2% | +12.1% | Worse |
+
+The 5-minute trail used Binance 5-minute klines (checksum-verified, cached like the 1h
+data); within each 5-minute candle the stop is checked before the best price is updated.
+Run with the research timing reproduced exactly, the same code matched the main bot to the
+decimal.
+
+What it shows:
+
+* **The trailing exit's profit comes from a few large trends.** Rules that cut winners
+  sooner (a tighter trail, an R-ladder, pauses after wins) remove exactly those trades.
+* **Pauses after losses suit the +1.5R exit, not the trailing one.** The main bot wins 36-40%
+  of trades, so five losses in a row are routine, and its big winners often follow a run
+  of failed breakouts. Bot 2 wins about 45%, where five losses in a row more often mean a
+  choppy market.
+* **A faster-moving 3 ATR trail is the only idea that is not clearly worse**, and it is
+  better in two periods of three. It would need the live bot to manage stops intrabar
+  (or Delta's native trailing stop); it is not adopted on in-sample evidence.
+
+Bot 2's account under the same per-coin cooldown after a win: holdout +1.5% / +2.7% /
++2.1% / +0.4% / -0.4% and development +33.2% / +17.9% / +24.2% / +27.7% / +18.4% for 1 /
+3 / 7 / 14 / 30 days, against +4.4% and +35.7% without. Its trades right after a winning
+exit on the same coin were among its best (+0.40R average within 3 days), because the
++1.5R target leaves the rest of the trend for the next breakout.

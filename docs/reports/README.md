@@ -13,9 +13,17 @@ Open the `.html` files in a browser; the `.json` files are the reproducible reco
 | `trend_portfolio-dev-875c250051698836.json` | Trend portfolio on shared capital, development period, Delta listing dates | Not validated (+38.0%, max DD -8.1%; 94th random percentile) |
 | `trend_portfolio-dev-unlisted-875c250051698836.json` | The same, every coin treated as listed since 2021 (sensitivity) | Validated candidate (+53.6%, max DD -16.7%) |
 | `trend_portfolio-holdout-875c250051698836.json` | Trend portfolio, holdout year (logged look 4; not a clean holdout) | Validated candidate (+14.8%, max DD -16.6%) |
+| `trend_portfolio_tp15-dev-f1999311127f1dd7.json` | Second paper bot (fixed stop, +1.5R target), development period | Validated candidate (+35.7%, max DD -9.8%) |
+| `trend_portfolio_tp15-dev-unlisted-f1999311127f1dd7.json` | The same, every coin treated as listed since 2021 | Not validated (+50.9%, max DD -15.8%; 58% of windows) |
+| `trend_portfolio_tp15-holdout-f1999311127f1dd7.json` | Second paper bot, holdout year (logged look 5; chosen after the holdout was seen) | Not validated (+4.4%, max DD -17.4%; 74th random percentile) |
+| `trend_portfolio_tp15_pause-dev-6318e58e22fe3f3a.json` | Third paper bot (+1.5R, 5% correlated risk, 48 h pause after 5 losses), development period | Validated candidate (+37.9%, max DD -10.8%) |
+| `trend_portfolio_tp15_pause-dev-unlisted-6318e58e22fe3f3a.json` | The same, every coin treated as listed since 2021 | Validated candidate (+121.5%, max DD -10.8%) |
+| `trend_portfolio_tp15_pause-holdout-6318e58e22fe3f3a.json` | Third paper bot, holdout year (logged look 6; chosen after the holdout was seen) | Not validated (+4.4%, max DD -15.3%; 76th random percentile) |
 
-The three portfolio reports were regenerated at `bcbaaa0` after the trailing-stop timing
-correction ([research.md](../research.md#correction-14-november-2026-trailing-stop-timing)).
+The main bot's three portfolio reports were regenerated at `bcbaaa0` after the trailing-stop
+timing correction ([research.md](../research.md#correction-14-november-2026-trailing-stop-timing));
+the second and third bots' reports were added at `39a0821`
+([research.md](../research.md#the-three-paper-bots-official-reports-16-november-2026)).
 
 Regenerate with:
 
@@ -26,4 +34,9 @@ signal-bot-research run --config signal_bot/research/strategies/<name>.toml \
 
 The trend-breakout holdout reports were produced with `scripts/research_holdout.py`, which loads bars from 2025-07 only to warm up indicators. See [Strategy iteration](../research.md#strategy-iteration-november-2026).
 
-Portfolio reports come from `scripts/research_portfolio.py` (JSON only).
+Portfolio reports come from `scripts/research_portfolio.py` (JSON only), one config at a time:
+
+```bash
+python scripts/research_portfolio.py --config signal_bot/research/strategies/<name>.toml --period dev [--ignore-listing]
+python scripts/research_portfolio.py --config signal_bot/research/strategies/<name>.toml --period holdout
+```

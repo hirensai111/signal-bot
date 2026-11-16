@@ -7,7 +7,10 @@
     # holdout year (2025-10..2026-09): config must be committed; every run is a counted look
     python scripts/research_portfolio.py --period holdout
 
-Writes docs/reports/trend_portfolio-<period>-<config hash>.json and appends an entry
+    # the second and third paper bots
+    python scripts/research_portfolio.py --config signal_bot/research/strategies/trend_portfolio_tp15.toml --period dev
+
+Writes docs/reports/<config name>-<period>-<config hash>.json and appends an entry
 to docs/research-log.jsonl.
 """
 
@@ -33,7 +36,13 @@ PERIODS = {
     "dev": ("2021-01", "2021-01-01", "2025-10-01", "2025-09"),
     "holdout": ("2025-01", "2025-10-01", "2026-10-01", "2026-09"),
 }
-SIGNAL_NAMES = ("trend_breakout", "trend_portfolio")  # same frozen signal: one holdout count
+# Same frozen breakout entries: one holdout count across every variant that trades them
+SIGNAL_NAMES = (
+    "trend_breakout",
+    "trend_portfolio",
+    "trend_portfolio_tp15",
+    "trend_portfolio_tp15_pause",
+)
 
 
 def main() -> None:
@@ -81,7 +90,7 @@ def main() -> None:
         "data": [{"symbol": d.symbol, "snapshot_id": d.snapshot_id} for d in data],
     }
     suffix = "" if respect else "-unlisted"
-    out = Path(args.out) / f"trend_portfolio-{args.period}{suffix}-{cfg['_hash']}.json"
+    out = Path(args.out) / f"{cfg['name']}-{args.period}{suffix}-{cfg['_hash']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=1, default=str))
 
@@ -104,7 +113,7 @@ def main() -> None:
         "random_percentile": result["random_baseline"]["strategy_percentile"],
         "positive_window_share": result["positive_window_share"],
         "refusals": s["refusals"],
-        "report": str(out),
+        "report": out.as_posix(),  # forward slashes on every OS, like the earlier entries
     }
     if args.period == "holdout":
         previous = sum(
