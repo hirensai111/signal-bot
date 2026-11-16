@@ -27,6 +27,8 @@ inhibit_rules:
     equal: [instance]
 receivers:
   - name: blackhole
+  # BEGIN telegram (entrypoint.sh deletes this block when Telegram is not configured:
+  # Alertmanager rejects a telegram_config without a real chat_id)
   - name: telegram
     telegram_configs:
       - bot_token_file: /tmp/telegram_token
@@ -35,6 +37,7 @@ receivers:
         parse_mode: HTML
         send_resolved: true
         message: '{{ template "signalbot.telegram" . }}'
+  # END telegram
   - name: deadman
     webhook_configs:
       - url: __DEADMAN_URL__

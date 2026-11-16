@@ -187,15 +187,20 @@ jobs:
         run: |
           docker run --rm -v "$PWD/deploy/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v2.53.0 check config /etc/prometheus/prometheus.yml
           docker run --rm -v "$PWD/deploy/prometheus:/p:ro" -w /p --entrypoint promtool prom/prometheus:v2.53.0 test rules alerts.test.yml
-      - name: Alertmanager config renders and validates
+      - name: Alertmanager config renders and validates (with and without Telegram)
         run: |
-          mkdir -p /tmp/am
-          docker run --rm -e RENDER_ONLY=1 -e TELEGRAM_BOT_TOKEN=1:x -e TELEGRAM_CHAT_ID=1 \
-            -e DEADMANS_SWITCH_URL=https://example.invalid/ping \
-            -v "$PWD/deploy/alertmanager:/etc/alertmanager-src:ro" \
-            --entrypoint sh prom/alertmanager:v0.27.0 /etc/alertmanager-src/entrypoint.sh > /tmp/am/alertmanager.yml
-          docker run --rm -v /tmp/am:/am:ro -v "$PWD/deploy/alertmanager:/etc/alertmanager-src:ro" \
-            --entrypoint amtool prom/alertmanager:v0.27.0 check-config /am/alertmanager.yml
+          check() {
+            docker run --rm -e RENDER_ONLY=1 "$@" \
+              -v "$PWD/deploy/alertmanager:/etc/alertmanager-src:ro" \
+              --entrypoint sh prom/alertmanager:v0.27.0 \
+              -c 'sh /etc/alertmanager-src/entrypoint.sh > /tmp/a.yml && amtool check-config /tmp/a.yml'
+          }
+          echo "--- Telegram and dead man's switch configured"
+          check -e TELEGRAM_BOT_TOKEN=1:x -e TELEGRAM_CHAT_ID=1 -e DEADMANS_SWITCH_URL=https://example.invalid/ping
+          echo "--- Telegram not configured (workflow env sets both to empty strings)"
+          check -e TELEGRAM_BOT_TOKEN= -e TELEGRAM_CHAT_ID=
+          echo "--- Telegram variables absent"
+          check
       - name: Loki and Alloy configs parse
         run: |
           docker run --rm -v "$PWD/deploy/loki:/l:ro" grafana/loki:3.3.2 -config.file=/l/loki.yml -verify-config

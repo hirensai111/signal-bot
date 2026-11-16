@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from signal_bot.observability import metrics
@@ -200,6 +204,39 @@ def test_alertmanager_template_placeholders_are_all_rendered():
     entry = (ROOT / "deploy/alertmanager/entrypoint.sh").read_text()
     for placeholder in set(re.findall(r"__[A-Z_]+__", tmpl)):
         assert placeholder in entry, f"{placeholder} is never substituted"
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="needs a POSIX shell")
+def test_alertmanager_config_without_telegram_has_no_telegram_receiver(tmp_path):
+    # Alertmanager refuses a telegram_config without a chat_id, so an unconfigured
+    # stack must render no telegram receiver at all (and never route to one).
+    out = tmp_path / "alertmanager.yml"
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "RENDER_ONLY": "1",
+        "TELEGRAM_BOT_TOKEN": "",
+        "TELEGRAM_CHAT_ID": "",
+        "ALERTMANAGER_SRC_DIR": str(ROOT / "deploy/alertmanager"),
+        "ALERTMANAGER_OUT": str(out),
+    }
+    subprocess.run(
+        ["sh", str(ROOT / "deploy/alertmanager/entrypoint.sh")],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    rendered = yaml.safe_load(out.read_text())
+    names = {r["name"] for r in rendered["receivers"]}
+    assert "telegram" not in names and "blackhole" in names
+    assert not any("telegram_configs" in r for r in rendered["receivers"])
+
+    def receivers(route):
+        yield route["receiver"]
+        for child in route.get("routes", []):
+            yield from receivers(child)
+
+    assert set(receivers(rendered["route"])) <= names
+    assert re.search(r"__[A-Z_]+__", out.read_text()) is None
 
 
 def test_paper_only_setting_refuses_live():
