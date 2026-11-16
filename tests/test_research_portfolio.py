@@ -200,7 +200,11 @@ def test_bar_close_ratchet_frees_open_risk_for_the_same_close(tmp_path):
     n = 30
     # A: long decided at bar 5 (entry 100, stop 98, 3-point trail), enters at bar 6.
     # Flat until bar 20, whose high of 110 trails the stop to 107; it holds above after.
-    rows_a = [(100, 100.5, 99.5, 100)] * 20 + [(100, 110, 100, 109.5)] + [(109.5, 110, 109, 109.5)] * (n - 21)
+    rows_a = (
+        [(100, 100.5, 99.5, 100)] * 20
+        + [(100, 110, 100, 109.5)]
+        + [(109.5, 110, 109, 109.5)] * (n - 21)
+    )
     # B: long decided at bar 20 (entry 50, stop 49).
     rows_b = [(50, 50.2, 49.8, 50)] * n
     fa, fb = _bars(rows_a), _bars(rows_b)

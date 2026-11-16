@@ -10,9 +10,9 @@ Open the `.html` files in a browser; the `.json` files are the reproducible reco
 | `exhaustion_reversion_unfiltered-v0.1.0-bb7cfc7e0d2cdd59` | Exhaustion reversion without the filter | Not validated |
 | `trend_breakout-v0.2.0-e3bbba552778704c` | Trend breakout 0.2.0, pre-registered holdout (look 1), BTC/ETH/SOL | Not validated (−0.02R per trade) |
 | `trend_breakout-v0.2.0-caf2c79e29364b34` | Trend breakout 0.2.0, same frozen config on 8 coins never used in development (look 2) | Not validated (+0.15R per trade, not significant) |
-| `trend_portfolio-dev-875c250051698836.json` | Trend portfolio on shared capital, development period, Delta listing dates | Not validated (+25.1%, max DD -10.3%) |
-| `trend_portfolio-dev-unlisted-875c250051698836.json` | The same, every coin treated as listed since 2021 (sensitivity) | Not validated (+22.3%, max DD -18.7%) |
-| `trend_portfolio-holdout-875c250051698836.json` | Trend portfolio, holdout year (look 3) | Not validated (+3.4%, max DD -16.4%) |
+| `trend_portfolio-dev-875c250051698836.json` | Trend portfolio on shared capital, development period, Delta listing dates | Not validated (+38.0%, max DD -8.1%; 94th random percentile). Regenerated November 16 with the bar-close trail ratchet; was +25.1%, -10.3% |
+| `trend_portfolio-dev-unlisted-875c250051698836.json` | The same, every coin treated as listed since 2021 (sensitivity, survivorship-biased) | All criteria pass (+53.6%, max DD -16.7%). Regenerated November 16; was +22.3%, -18.7%, not validated |
+| `trend_portfolio-holdout-875c250051698836.json` | Trend portfolio, holdout year: corrected **re-run of a seen period** (look 4; look 3 gave +3.4%, -16.4%, not validated) | All criteria pass (+14.8%, max DD -16.6%), not out-of-sample |
 
 Regenerate with:
 

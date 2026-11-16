@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Research portfolio admitted against trailing stops one bar stale.** `run_portfolio`
+  stepped positions through bar *t* with `step_trade`, which applies bar *t*'s trail
+  ratchet only from bar *t+1*. Admission at *t*'s close therefore overstated the open and
+  correlated risk of trailing winners. Live amends the stop before admitting the batch.
+  A ratchet pass (`fill_model.ratchet_trail`) now runs between stepping and admission.
+  No exit changes, and tests pin both properties. Live code is unchanged.
+
+### Research
+- **Corrected trend portfolio reports** (same config, rules and signal). Development
+  with listing dates: +38.0%, max DD -8.1% (was +25.1%, -10.3%). All coins since 2021:
+  +9.5%/yr (was +4.3%/yr). Holdout, a labelled re-run of a seen year: +14.8% (was +3.4%).
+  The fixed-exit variants (`trend_portfolio_tp15*`) do not trail and are unchanged.
+- **The exit-variant conclusion is reversed.** After the fix, the trailing-only exit
+  returns at least as much as the +1.5R target in every period (docs/research.md,
+  *Exit variants*).
+- **Sensitivity of account-level results is documented.** Admitting a different ~10% of
+  trades moved the holdout year by 11 points without any exit changing (docs/research.md,
+  *How sensitive account-level results are*).
+
 ## 2.4.0
 
 A third paper bot to forward-test two account rules on the second bot's strategy.

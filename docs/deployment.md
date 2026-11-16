@@ -268,7 +268,8 @@ trade database. Alerts start with `[TP 1.5R + pause bot]`. Backups add
 limits only decide whether a *new* trade may open. Open risk is measured from the
 current price to each position's current stop, and a 3 ATR trailing stop sits further
 from the price than the 2 ATR initial stop. So as winners run, open risk rises above
-the limit: the research peak was 6.9% against 3%. Nothing cuts positions back. The
+the limit: the research peak was 3.2% against 3% (an earlier 6.9% came from a
+research error that left trailing stops one bar stale). Nothing cuts positions back. The
 panels draw the limit as a dashed red line next to the actual value. Alerts fire at
 1.5x the limit (warning) and 2.5x (critical).
 
