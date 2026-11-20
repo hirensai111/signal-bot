@@ -32,11 +32,13 @@ authentication failures; ``-1007``, 408 and 5xx on a placement are *ambiguous* (
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -210,6 +212,13 @@ class BinanceFuturesAdapter:
         self.margin_type = margin_type
         self._symbol_of: dict[str, str] = {}  # client order id -> symbol
         self._margin_set: set[str] = set()
+        # control-room equity history (the paper broker keeps the same list)
+        self.equity_curve: list[dict] = []
+        self.equity_path: Path | None = None
+        self._initial: float | None = None
+        self._income: dict[str, float] = {}
+        self._last_point: dict | None = None
+        self._snapshots = 0
 
     # ------------------------------------------------------------------
     # instruments
@@ -777,6 +786,88 @@ class BinanceFuturesAdapter:
     # ------------------------------------------------------------------
     # balances
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # equity history and account summary for the control room
+    # ------------------------------------------------------------------
+    def load_equity_curve(self, path: str | Path) -> None:
+        """Restore the equity history (and starting balance) saved by earlier runs."""
+        self.equity_path = Path(path)
+        try:
+            saved = json.loads(self.equity_path.read_text())
+            self.equity_curve = list(saved.get("curve") or [])
+            self._initial = saved.get("initial")
+        except FileNotFoundError:
+            pass
+        except Exception:
+            logger.exception("Binance equity history at %s not readable", self.equity_path)
+
+    def _save_equity_curve(self) -> None:
+        if self.equity_path is None:
+            return
+        tmp = self.equity_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"initial": self._initial, "curve": self.equity_curve[-20000:]}))
+        tmp.replace(self.equity_path)
+
+    async def _refresh_income(self) -> None:
+        """Realised P&L, commission and funding over the last 89 days of trading."""
+        start = int((time.time() - 89 * 86400) * 1000)
+        rows = await self._call("income", self.client.income(start_time_ms=start))
+        totals: dict[str, float] = {}
+        for r in rows or []:
+            kind = str(r.get("incomeType") or "")
+            totals[kind] = totals.get(kind, 0.0) + float(r.get("income") or 0)
+        self._income = totals
+
+    async def snapshot_equity(self) -> dict:
+        """One equity point (every minute while the bot runs), like the paper broker."""
+        body = await self._call("balance", self.client.account())
+        if self._snapshots % 10 == 0:
+            try:
+                await self._refresh_income()
+            except Exception:
+                logger.warning("Binance income history not refreshed")
+        self._snapshots += 1
+        point = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "equity": float(_dec(body.get("totalMarginBalance"))),
+            "cash": float(_dec(body.get("totalWalletBalance"))),
+            "unrealized": float(_dec(body.get("totalUnrealizedProfit"))),
+        }
+        if self._initial is None:
+            # the wallet before any trading: today's wallet minus what trading added
+            traded = sum(self._income.get(k, 0.0) for k in ("REALIZED_PNL", "COMMISSION"))
+            self._initial = point["cash"] - traded - self._income.get("FUNDING_FEE", 0.0)
+        self._last_point = point
+        self.equity_curve.append(point)
+        self._save_equity_curve()
+        return point
+
+    async def run_equity_snapshots(self, interval: float = 60.0) -> None:
+        while True:
+            try:
+                await self.snapshot_equity()
+            except Exception:
+                logger.warning("Binance equity snapshot failed", exc_info=True)
+            await asyncio.sleep(interval)
+
+    def account_summary(self) -> dict | None:
+        """The paper broker's account summary fields, from the latest Binance snapshot."""
+        p = self._last_point
+        if p is None:
+            return None
+        initial = self._initial or p["cash"]
+        return {
+            "initial": initial,
+            "equity": p["equity"],
+            "cash": p["cash"],
+            "unrealized": p["unrealized"],
+            "realized_pnl": self._income.get("REALIZED_PNL", 0.0),
+            "fees_paid": -self._income.get("COMMISSION", 0.0),
+            "funding": self._income.get("FUNDING_FEE", 0.0),
+            "return_pct": (p["equity"] / initial - 1) * 100 if initial else 0.0,
+            "book_source_error": None,
+        }
+
     async def account_equity(self) -> Decimal:
         """``totalMarginBalance``: wallet balance plus unrealised PnL (USD-M, single-asset)."""
         try:

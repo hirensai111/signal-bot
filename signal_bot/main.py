@@ -384,6 +384,10 @@ async def main() -> None:
             adapter = venue_adapter
             if binance_venue:
                 await adapter.prepare()  # one-way position mode
+                # control-room equity history, kept next to the bot's other state
+                adapter.load_equity_curve(
+                    Path(settings.paper_state_path).with_name("binance_equity.json")
+                )
             mode = EXEC_MODE.LIVE
         else:
             adapter = PaperBroker(
@@ -627,6 +631,8 @@ async def main() -> None:
         ]
         if isinstance(adapter, PaperBroker):
             tasks.append(asyncio.create_task(adapter.run(), name="paper_broker"))
+        elif isinstance(adapter, BinanceFuturesAdapter):
+            tasks.append(asyncio.create_task(adapter.run_equity_snapshots(), name="binance_equity"))
         if stream is not None:
             stream.start()
 

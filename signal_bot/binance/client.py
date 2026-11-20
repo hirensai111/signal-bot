@@ -380,6 +380,13 @@ class BinanceFuturesClient:
     async def position_risk(self, symbol: str | None = None) -> list[dict]:
         return await self._request("GET", "/fapi/v3/positionRisk", {"symbol": symbol}, signed=True)
 
+    async def income(self, start_time_ms: int | None = None, limit: int = 1000) -> list[dict]:
+        """Income history (``REALIZED_PNL``, ``COMMISSION``, ``FUNDING_FEE``, ...); without
+        ``startTime`` Binance returns only the last 7 days."""
+        return await self._request(
+            "GET", "/fapi/v1/income", {"startTime": start_time_ms, "limit": limit}, signed=True
+        )
+
     async def account(self) -> dict:
         return await self._request("GET", "/fapi/v3/account", signed=True)
 

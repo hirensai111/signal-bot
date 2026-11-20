@@ -461,6 +461,37 @@ async def test_connect_publishes_the_open_positions():
     assert positions[0].payload["has_stop_loss"] is True
 
 
+async def test_equity_history_and_account_summary(tmp_path):
+    fake = FakeClient()
+
+    async def account():
+        return {
+            "totalMarginBalance": "5008.09",
+            "totalWalletBalance": "5008.72",
+            "totalUnrealizedProfit": "-0.63",
+            "availableBalance": "4000",
+        }
+
+    async def income(start_time_ms=None, limit=1000):
+        return [
+            {"incomeType": "COMMISSION", "income": "-3.28"},
+            {"incomeType": "REALIZED_PNL", "income": "12.0"},
+        ]
+
+    fake.account, fake.income = account, income
+    adapter = adapter_with(fake)
+    adapter.load_equity_curve(tmp_path / "binance_equity.json")
+    assert adapter.account_summary() is None
+    await adapter.snapshot_equity()
+    summary = adapter.account_summary()
+    assert summary["equity"] == 5008.09 and summary["fees_paid"] == 3.28
+    assert summary["initial"] == pytest.approx(5008.72 - 12.0 + 3.28)
+    # the history survives a restart
+    again = adapter_with(fake)
+    again.load_equity_curve(tmp_path / "binance_equity.json")
+    assert len(again.equity_curve) == 1 and again._initial == summary["initial"]
+
+
 # ---------------------------------------------------------------------------
 # client helpers and configuration
 # ---------------------------------------------------------------------------
