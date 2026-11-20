@@ -18,6 +18,7 @@ rules -> engine, with stepped trailing stops); otherwise the 2.0 liquidity sweep
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import signal
 import sys
@@ -28,6 +29,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from signal_bot.binance.client import BinanceFuturesClient, BinanceUserStream
 from signal_bot.config import settings
 from signal_bot.db.connection import AsyncSessionLocal, async_engine
 from signal_bot.db.migrate import upgrade as upgrade_schema
@@ -35,6 +37,7 @@ from signal_bot.db.models import Base, Instrument
 from signal_bot.delivery.telegram_bot import TelegramNotifier
 from signal_bot.delta.client import DeltaClient, DeltaWebSocket
 from signal_bot.events import Event, EventBus, EventType, SqlEventJournal
+from signal_bot.execution.binance_adapter import BinanceFuturesAdapter, BinanceStreamBridge
 from signal_bot.execution.delta_adapter import DeltaExchangeAdapter, DeltaStreamBridge
 from signal_bot.execution.engine import EXEC_MODE, ExecutionConfig, ExecutionEngine
 from signal_bot.execution.order_store import OrderStore
@@ -316,8 +319,8 @@ async def main() -> None:
         str(release.get("name")),
         str(release.get("version")),
         settings.exec_mode,
-        "delta" if live else "paper",
-        settings.delta_mode,
+        settings.exec_venue if live else "paper",
+        settings.binance_trade_mode if settings.exec_venue == "binance" else settings.delta_mode,
     ).set(1)
     strategy = release
     trend_mode = is_trend(release)
@@ -352,23 +355,41 @@ async def main() -> None:
 
     bus = EventBus(SqlEventJournal(AsyncSessionLocal))
     telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
-    delta_client = DeltaClient(
-        settings.delta_api_key, settings.delta_api_secret, settings.delta_mode, symbols=symbols
-    )
+    binance_venue = settings.exec_venue == "binance"
 
-    async with delta_client:  # loads Delta products (public) for symbol mapping
-        delta_adapter = DeltaExchangeAdapter(delta_client)
-        # Symbols Delta doesn't list as live perpetuals are still ingested (features,
-        # research) but are not tradable; their signals are refused as symbol_unmapped.
-        tradable = [s for s in symbols if s in delta_client.symbol_map._binance_to_delta]
+    async with contextlib.AsyncExitStack() as venue_stack:
+        # The venue client loads its products (public) for symbol mapping.  Symbols the
+        # venue doesn't list are still ingested (features, research) but are not
+        # tradable; their signals are refused as symbol_unmapped.
+        if binance_venue:
+            binance_client = await venue_stack.enter_async_context(
+                BinanceFuturesClient(symbols=symbols)
+            )
+            venue_adapter = BinanceFuturesAdapter(binance_client)
+            tradable = [s for s in symbols if s in binance_client.rules]
+            not_on_venue = binance_client.missing
+        else:
+            delta_client = await venue_stack.enter_async_context(
+                DeltaClient(
+                    settings.delta_api_key,
+                    settings.delta_api_secret,
+                    settings.delta_mode,
+                    symbols=symbols,
+                )
+            )
+            venue_adapter = DeltaExchangeAdapter(delta_client)
+            tradable = [s for s in symbols if s in delta_client.symbol_map._binance_to_delta]
+            not_on_venue = delta_client.symbol_map.missing
         if live:
-            adapter = delta_adapter
+            adapter = venue_adapter
+            if binance_venue:
+                await adapter.prepare()  # one-way position mode
             mode = EXEC_MODE.LIVE
         else:
             adapter = PaperBroker(
-                {s: delta_adapter.instrument(s) for s in tradable},
+                {s: venue_adapter.instrument(s) for s in tradable},
                 bus,
-                book_source=delta_adapter.order_book,
+                book_source=venue_adapter.order_book,
                 session_factory=AsyncSessionLocal,
                 costs=CostModel(
                     taker_fee=Decimal(str(settings.paper_taker_fee)),
@@ -508,7 +529,15 @@ async def main() -> None:
             sizer = RiskSizer()
 
         stream = None
-        if live:
+        if live and binance_venue:
+            bn_bridge = BinanceStreamBridge(bus, adapter)
+            stream = BinanceUserStream(
+                binance_client,
+                bn_bridge.handle_raw,
+                on_connect=bn_bridge.on_connect,
+                on_disconnect=bn_bridge.on_disconnect,
+            )
+        elif live:
             bridge = DeltaStreamBridge(bus)
             stream = DeltaWebSocket(
                 delta_client,
@@ -528,7 +557,8 @@ async def main() -> None:
                 "strategy": strategy,
                 "settings_fingerprint": settings.fingerprint(),
                 "tradable_symbols": tradable,
-                "not_on_delta": delta_client.symbol_map.missing,
+                "not_on_delta": not_on_venue,  # symbols the order venue doesn't list
+                "binance_trade_mode": settings.binance_trade_mode if binance_venue else None,
             },
             governor=governor,
             bus=bus,

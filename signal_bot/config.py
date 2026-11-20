@@ -19,6 +19,8 @@ SECRET_FIELDS = frozenset(
         "telegram_chat_id",
         "delta_api_key",
         "delta_api_secret",
+        "binance_futures_api_key",
+        "binance_futures_api_secret",
         "operator_token",
     }
 )
@@ -70,6 +72,18 @@ class Settings(BaseSettings):
     delta_ws_auth_path: str = "/live"  # key-auth signs "GET" + timestamp + this path
     # Sign of bracket_trail_amount: "positive" or "negative_for_long" (confirm on testnet).
     delta_trail_amount_sign: str = "positive"
+
+    # Order venue for EXEC_MODE=live: "delta" (Delta Exchange India) or "binance"
+    # (Binance USD-M futures; signals still come from production Binance market data).
+    exec_venue: str = "delta"
+    # Binance USD-M futures orders: "demo" (demo-fapi.binance.com, practice funds) or
+    # "production" (real money; also needs LIVE_TRADING_ACKNOWLEDGED=true).
+    binance_trade_mode: str = "demo"
+    # Trading keys, separate from the (unused, optional) market-data BINANCE_API_KEY.
+    binance_futures_api_key: str = ""
+    binance_futures_api_secret: str = ""
+    # Private user-data socket path before the listenKey; empty = the documented default.
+    binance_user_ws_path: str = ""
 
     # Execution: "paper" (realistic simulated fills on live Delta books) or "live".
     # "dry_run" is accepted as a deprecated alias for "paper".
@@ -154,14 +168,29 @@ class Settings(BaseSettings):
             problems.append(
                 f"PAPER_ONLY=true: this deployment only runs EXEC_MODE=paper (got {self.exec_mode!r})"
             )
-        if self.exec_mode == "live":
+        if self.exec_venue not in ("delta", "binance"):
+            problems.append(f"EXEC_VENUE must be delta or binance, got {self.exec_venue!r}")
+        if self.binance_trade_mode not in ("demo", "production"):
+            problems.append(
+                f"BINANCE_TRADE_MODE must be demo or production, got {self.binance_trade_mode!r}"
+            )
+        refuse_production = (
+            "Refusing production trading: set LIVE_TRADING_ACKNOWLEDGED=true after "
+            "completing the go-live checklist in docs/runbook.md"
+        )
+        if self.exec_mode == "live" and self.exec_venue == "binance":
+            if not (self.binance_futures_api_key and self.binance_futures_api_secret):
+                problems.append(
+                    "EXEC_MODE=live with EXEC_VENUE=binance requires BINANCE_FUTURES_API_KEY "
+                    "and BINANCE_FUTURES_API_SECRET"
+                )
+            if self.binance_trade_mode == "production" and not self.live_trading_acknowledged:
+                problems.append(refuse_production)
+        elif self.exec_mode == "live":
             if not (self.delta_api_key and self.delta_api_secret):
                 problems.append("EXEC_MODE=live requires DELTA_API_KEY and DELTA_API_SECRET")
             if self.delta_mode == "production" and not self.live_trading_acknowledged:
-                problems.append(
-                    "Refusing production trading: set LIVE_TRADING_ACKNOWLEDGED=true after "
-                    "completing the go-live checklist in docs/runbook.md"
-                )
+                problems.append(refuse_production)
         if self.trail_mode not in ("stepped", "native"):
             problems.append(f"TRAIL_MODE must be stepped or native, got {self.trail_mode!r}")
         if self.delta_trail_amount_sign not in ("positive", "negative_for_long"):

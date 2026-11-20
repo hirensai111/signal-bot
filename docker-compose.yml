@@ -10,6 +10,7 @@
 #   Control room   127.0.0.1:8080   status; halt/resume need OPERATOR_TOKEN
 #   Control room   127.0.0.1:8081   the optional second paper bot (profile "tp", below)
 #   Control room   127.0.0.1:8082   the optional third paper bot (profile "tp2", below)
+#   Control room   127.0.0.1:8083   the optional Binance demo bot (profile "bn", below)
 #   Prometheus     127.0.0.1:9090   Alertmanager 127.0.0.1:9093   Loki 127.0.0.1:3100
 
 x-logging: &logging
@@ -132,6 +133,39 @@ services:
     stop_grace_period: 30s
     logging: *logging
 
+  # Optional Binance demo bot: the main strategy (trend_portfolio.toml) placing real orders
+  # on Binance USD-M futures DEMO TRADING (demo-fapi.binance.com, practice funds).  Signals
+  # still come from production Binance market data.  BINANCE_TRADE_MODE is pinned to demo
+  # here and never read from .env; the keys are BINANCE_FUTURES_API_KEY / _SECRET in .env.
+  # Own database signal_bot_bn, state volume and control room on 8083.  Off unless the
+  # "bn" profile is enabled (docs/deployment.md, "Binance demo bot").
+  bot-bn:
+    image: signal-bot:${SIGNAL_BOT_COMMIT:-local}
+    pull_policy: never  # built by the "bot" service (docker compose build bot)
+    profiles: ["bn"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://signalbot:${POSTGRES_PASSWORD}@postgres:5432/signal_bot_bn
+      STRATEGY_CONFIG: signal_bot/research/strategies/trend_portfolio.toml
+      EXEC_MODE: live
+      EXEC_VENUE: binance
+      BINANCE_TRADE_MODE: demo
+      PAPER_ONLY: "false"
+      LIVE_TRADING_ACKNOWLEDGED: "false"
+      OPS_HOST: 0.0.0.0
+      LOG_FORMAT: json
+      PAPER_STATE_PATH: /home/bot/data/paper_state.json
+      BOT_LABEL: "Binance demo"
+      TELEGRAM_COMMANDS: "false"
+    volumes: [botdata-bn:/home/bot/data]
+    depends_on:
+      postgres: {condition: service_healthy}
+      db-roles: {condition: service_completed_successfully}
+    ports: ["127.0.0.1:8083:8080"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *logging
+
   prometheus:
     image: prom/prometheus:v2.53.0
     command:
@@ -234,6 +268,7 @@ services:
       - botdata:/botdata:ro
       - botdata-tp:/botdata-tp:ro
       - botdata-tp2:/botdata-tp2:ro
+      - botdata-bn:/botdata-bn:ro
     entrypoint: ["sh", "/backup.sh"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -245,6 +280,7 @@ volumes:
   botdata:
   botdata-tp:
   botdata-tp2:
+  botdata-bn:
   prometheus-data:
   alertmanager-data:
   loki-data:

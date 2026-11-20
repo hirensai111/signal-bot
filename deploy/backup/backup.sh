@@ -17,7 +17,7 @@ while true; do
       cp /botdata/paper_state.json "/backups/paper_state-$stamp.json"
     fi
     # Second and third paper bots: only once a database exists and its bot created tables.
-    for suffix in tp tp2; do
+    for suffix in tp tp2 bn; do
       db="signal_bot_$suffix"
       if [ "$(psql -d "$db" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>/dev/null || echo 0)" -gt 0 ]; then
         part="/backups/.${db}-$stamp.dump.partial"
@@ -33,7 +33,7 @@ while true; do
       fi
     done
     for pattern in 'signal_bot-*.dump' 'paper_state-*.json' 'signal_bot_tp-*.dump' 'paper_state_tp-*.json' \
-                   'signal_bot_tp2-*.dump' 'paper_state_tp2-*.json'; do
+                   'signal_bot_tp2-*.dump' 'paper_state_tp2-*.json' 'signal_bot_bn-*.dump'; do
       find /backups -maxdepth 1 -name "$pattern" -mtime +"$BACKUP_RETENTION_DAYS" -delete
     done
     size=$(wc -c < "/backups/signal_bot-$stamp.dump")

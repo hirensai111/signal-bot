@@ -14,7 +14,7 @@ SIGNAL_BOT_COMMIT=$(git rev-parse HEAD)
 docker compose build bot
 docker compose run --rm --no-deps bot python -m signal_bot.ops.preflight --skip-db
 docker compose up -d
-for pair in tp:bot-tp tp2:bot-tp2; do
+for pair in tp:bot-tp tp2:bot-tp2 bn:bot-bn; do
   profile=${pair%%:*}; service=${pair#*:}
   if docker compose ps --all --services 2>/dev/null | grep -qx "$service" \
     && ! docker compose config --services | grep -qx "$service"; then

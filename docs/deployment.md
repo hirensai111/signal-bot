@@ -239,6 +239,78 @@ trade database. Alerts start with `[TP 1.5R + pause bot]`. Backups add
 **Turn it off:** set `COMPOSE_PROFILES=tp` in `.env` and run
 `sudo docker compose --profile tp2 stop bot-tp2`. Its database and volume are kept.
 
+## Binance demo bot (main strategy on Binance futures demo trading)
+
+An optional fourth bot runs the **main strategy** with real orders on **Binance USD-M
+futures demo trading** (`demo-fapi.binance.com`, practice funds). It is the first test of
+the order path on a real exchange: fills, slippage, the stop orders, moving the stop, and
+the account stream. Signals still come from production Binance market data, exactly as for
+the paper bots.
+
+| | Main paper bot (`bot`) | Binance demo bot (`bot-bn`) |
+|---|---|---|
+| Orders | simulated on Delta's live books | real orders on Binance futures **demo** |
+| Strategy | `trend_portfolio.toml` | the same |
+| Account | $10,000 paper | the demo account's balance |
+| Database / state | `signal_bot`, `botdata` | `signal_bot_bn`, `botdata-bn` |
+| Control room | `127.0.0.1:8080` | `127.0.0.1:8083` |
+| Telegram | answers `/status` | tagged `[Binance demo]`, send-only |
+
+`BINANCE_TRADE_MODE=demo` is pinned in `docker-compose.yml`, not read from `.env`, and
+production would still need `LIVE_TRADING_ACKNOWLEDGED=true`.
+
+How orders map onto Binance (`execution/binance_adapter.py`): one-way position mode and
+isolated margin; the entry is an IOC limit order; as soon as it fills, a `STOP_MARKET`
+(and for +1.5R strategies a `TAKE_PROFIT_MARKET`) conditional order with `closePosition`
+is placed; moving the trailing stop places the new stop **before** cancelling the old one;
+leftover conditional orders are cancelled when a position goes flat and before the next
+entry on that coin.
+
+**1. Keys.** On `demo.binance.com` open *API management*, create a key with futures
+trading enabled (no withdrawals), and add it to `.env` on the server:
+
+```bash
+cd /opt/signal-bot && sudo nano .env
+# BINANCE_FUTURES_API_KEY=...
+# BINANCE_FUTURES_API_SECRET=...
+```
+
+**2. Read-only check** (no orders): connectivity, the 11 coins' trading rules, the demo
+balance, demo prices against production, and which user-stream path connects.
+
+```bash
+cd /opt/signal-bot && sudo docker compose run --rm --no-deps bot python -m signal_bot.binance.client --check
+```
+
+It needs `"auth": "ok"`, all 11 coins under `tradable`, `basis_pct` within about 0.1%
+(the engine refuses entries when the venue is more than 0.15% from the signal price), and
+a `user_stream` entry with `"connected": true`. If only the `/ws/` path connects, add
+`BINANCE_USER_WS_PATH=/ws/` to `.env`.
+
+**3. Order check** (places one tiny DEMO trade, then closes it):
+
+```bash
+cd /opt/signal-bot && sudo docker compose run --rm --no-deps bot python -m signal_bot.binance.order_check --yes-place-demo-orders
+```
+
+It must end with `"result": "PASS"`: the entry filled, a stop was attached, the stop moved
+(new before old), the position closed and nothing was left resting.
+
+**4. Start it:**
+
+```bash
+cd /opt/signal-bot && sudo sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=tp,tp2,bn/' .env
+sudo docker compose up -d
+sudo tailscale serve --bg --https=8446 http://127.0.0.1:8083
+```
+
+Watch it on `:8446`, in Grafana (Bot selector) and in Telegram (`[Binance demo]`).
+Backups add `signal_bot_bn-<stamp>.dump`.
+
+**Turn it off:** remove `bn` from `COMPOSE_PROFILES` and run
+`sudo docker compose --profile bn stop bot-bn`. Open demo positions are not closed by
+stopping the bot; close them on `demo.binance.com` if you stop for good.
+
 ## Access and permissions
 
 - **Nothing public.** Every port is bound to `127.0.0.1`. `tailscale serve` makes

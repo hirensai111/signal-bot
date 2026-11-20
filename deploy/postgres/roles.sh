@@ -17,7 +17,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
 -- tables the bot creates later (it owns them as signalbot)
 ALTER DEFAULT PRIVILEGES FOR ROLE signalbot IN SCHEMA public GRANT SELECT ON TABLES TO grafana_ro;
 SQL
-for db in signal_bot_tp signal_bot_tp2; do
+for db in signal_bot_tp signal_bot_tp2 signal_bot_bn; do
   psql -v ON_ERROR_STOP=1 -v db="$db" <<'SQL'
 SELECT format('CREATE DATABASE %I OWNER signalbot', :'db')
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db') \gexec
@@ -28,4 +28,4 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
 ALTER DEFAULT PRIVILEGES FOR ROLE signalbot IN SCHEMA public GRANT SELECT ON TABLES TO grafana_ro;
 SQL
 done
-echo "grafana_ro role ready (read-only); databases signal_bot_tp and signal_bot_tp2 ready"
+echo "grafana_ro role ready (read-only); databases signal_bot_tp, signal_bot_tp2 and signal_bot_bn ready"

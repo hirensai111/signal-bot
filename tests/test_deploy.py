@@ -116,7 +116,27 @@ def test_second_paper_bot_is_optional_paper_only_and_separate():
     assert "for db in signal_bot_tp signal_bot_tp2" in roles and "CREATE DATABASE %I" in roles
     assert "signal_bot_tp" in (ROOT / "deploy/backup/backup.sh").read_text()
     prom = (ROOT / "deploy/prometheus/prometheus.yml").read_text()
-    assert '"bot-tp"' in prom and "regex: (bot-tp2?)" in prom
+    assert '"bot-tp"' in prom and "regex: (bot-tp2?|bot-bn)" in prom
+
+
+def test_binance_demo_bot_is_optional_pinned_to_demo_and_separate():
+    compose = yaml.safe_load(COMPOSE.read_text())
+    services = compose["services"]
+    bn, main = services["bot-bn"], services["bot"]
+    env = bn["environment"]
+    assert bn["profiles"] == ["bn"]  # never started by a plain `docker compose up`
+    # demo trading is pinned in compose, not taken from .env; production stays refused
+    assert env["EXEC_VENUE"] == "binance" and env["BINANCE_TRADE_MODE"] == "demo"
+    assert env["EXEC_MODE"] == "live" and env["LIVE_TRADING_ACKNOWLEDGED"] == "false"
+    assert env["STRATEGY_CONFIG"].endswith("trend_portfolio.toml")
+    assert env["DATABASE_URL"].endswith("/signal_bot_bn")
+    assert env["TELEGRAM_COMMANDS"] == "false" and env["BOT_LABEL"]
+    assert bn["volumes"] != main["volumes"] and "botdata-bn" in compose["volumes"]
+    assert bn["ports"] == ["127.0.0.1:8083:8080"] and bn["image"] == main["image"]
+    assert "signal_bot_bn" in (ROOT / "deploy/postgres/roles.sh").read_text()
+    assert "tp tp2 bn" in (ROOT / "deploy/backup/backup.sh").read_text()
+    assert '"bot-bn"' in (ROOT / "deploy/prometheus/prometheus.yml").read_text()
+    assert "bn:bot-bn" in (ROOT / "deploy/update.sh").read_text()
 
 
 def test_third_paper_bot_copies_the_second_and_changes_only_its_account_rules():
