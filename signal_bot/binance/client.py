@@ -255,6 +255,20 @@ class BinanceFuturesClient:
         body = await self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
         return bool(body.get("dualSidePosition"))
 
+    async def multi_assets_mode(self) -> bool:
+        """``True`` when the account is in Multi-Assets mode (isolated margin unavailable)."""
+        body = await self._request("GET", "/fapi/v1/multiAssetsMargin", signed=True)
+        return bool(body.get("multiAssetsMargin"))
+
+    async def set_single_asset_mode(self) -> None:
+        try:
+            await self._request(
+                "POST", "/fapi/v1/multiAssetsMargin", {"multiAssetsMargin": "false"}, signed=True
+            )
+        except BinanceAPIError as exc:
+            if "no need" not in str(exc.msg).lower():
+                raise
+
     async def set_one_way_mode(self) -> None:
         try:
             await self._request(
@@ -600,9 +614,13 @@ def main() -> None:
     if args.symbols:
         symbols = args.symbols.split(",")
     else:
-        from signal_bot.research.experiment import load_config
+        import tomllib
 
-        doc = load_config(settings.strategy_config)
+        # the bot's own lookup: relative paths also resolve inside the installed package
+        from signal_bot.main import resolve_strategy_config
+
+        with resolve_strategy_config(settings.strategy_config).open("rb") as fh:
+            doc = tomllib.load(fh)
         symbols = list(doc.get("universe", {}).get("symbols") or settings.symbols)
     print(json.dumps(asyncio.run(_cli_check(symbols)), indent=2, default=str))
 

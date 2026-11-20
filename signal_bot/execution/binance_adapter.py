@@ -7,19 +7,22 @@ How the venue-neutral model maps onto Binance:
   ``n`` contracts is ``n * stepSize`` coins.  Quantities are converted at this boundary only.
 * **Brackets.**  Binance has no entry-plus-bracket order.  An entry is a ``LIMIT``/``IOC``
   order; as soon as it fills, a ``STOP_MARKET`` (and, if set, a ``TAKE_PROFIT_MARKET``)
-  *algo order* with ``closePosition=true`` is attached, before :meth:`place_order` returns.
+  *algo order* is attached, reduce-only for the filled quantity, before :meth:`place_order`
+  returns.
   If attaching fails the engine's protection check sees no stop and re-attaches through
   :meth:`place_protective_stop`, or flattens.
 * **Stops cannot be edited.**  :meth:`amend_stop` places the new stop first and then
   cancels the old one, so the position is never without a stop.  Client algo ids alternate
   ``<coid>S0`` / ``<coid>S1`` (Binance ids are unique among open orders, max 36 chars).
-* **Leftover conditional orders.**  A ``closePosition`` stop left over from a closed position
-  would close the *next* position on that symbol.  Before every entry the symbol's open algo
+* **Leftover conditional orders.**  A stop left over from a closed position would reduce the
+  *next* position on that symbol.  Before every entry the symbol's open algo
   orders are cancelled (the symbol must be flat), and the stream bridge sweeps a symbol once
   its position goes flat.
 * **Order lookup needs the symbol.**  Symbols are remembered per client order id; after a
   restart the tradable symbols are searched.
-* Position mode is one-way and margin is isolated (set before the first order on a symbol).
+* Position mode is one-way, Multi-Assets mode is switched off and margin is isolated (set
+  before the first order on a symbol).  Exits are reduce-only, never ``closePosition``:
+  Binance allows one closePosition stop per direction (``-4130``).
 
 Error taxonomy (see :mod:`signal_bot.execution.adapter`): 401/403 and key errors are
 authentication failures; ``-1007``, 408 and 5xx on a placement are *ambiguous* (Binance:
@@ -284,13 +287,71 @@ class BinanceFuturesAdapter:
     # setup
     # ------------------------------------------------------------------
     async def prepare(self) -> None:
-        """One-way position mode (the engine holds one position per symbol)."""
+        """One-way position mode (one position per symbol) and single-asset margin mode,
+        which isolated margin requires.  Both can only change while nothing is open."""
         try:
             if await self.client.position_mode():
                 await self.client.set_one_way_mode()
                 logger.info("Binance position mode switched to one-way")
+            if await self.client.multi_assets_mode():
+                try:
+                    await self.client.set_single_asset_mode()
+                    logger.info("Binance Multi-Assets mode switched off (isolated margin needs it)")
+                except BinanceAPIError as exc:
+                    if self._is_auth(exc):
+                        raise
+                    logger.warning(
+                        "Multi-Assets mode still on (%s): positions will use cross margin",
+                        exc.msg,
+                    )
         except BinanceAPIError as exc:
             raise self._read_error(exc) from exc
+
+    def _exit_order(
+        self, symbol: str, side: str, kind: str, trigger: Decimal, qty: Decimal, caid: str
+    ) -> dict[str, Any]:
+        """A reduce-only conditional exit for an exact quantity.
+
+        Not ``closePosition``: Binance allows only one closePosition stop per direction
+        (``-4130``), which would make "place the new stop, then cancel the old" impossible.
+        A reduce-only order can never open or flip a position.
+        """
+        return {
+            "symbol": symbol,
+            "side": side.upper(),
+            "type": kind,
+            "triggerPrice": self._price(symbol, trigger),
+            "quantity": qty,
+            "reduceOnly": "true",
+            "workingType": WORKING_TYPE,
+            "clientAlgoId": caid,
+        }
+
+    async def _with_fill_price(self, order: ExchangeOrder) -> ExchangeOrder:
+        """Binance may answer a filled IOC order without ``avgPrice``: read it back."""
+        if order.filled_size <= 0 or order.avg_fill_price is not None:
+            return order
+        try:
+            raw = await self._call(
+                "get_order",
+                self.client.get_order(order.symbol, client_order_id=order.client_order_id),
+            )
+            refreshed = parse_order(raw, self._step(order.symbol))
+            if refreshed.avg_fill_price is not None:
+                return replace(order, avg_fill_price=refreshed.avg_fill_price)
+        except Exception:
+            pass  # fall back to the fills
+        try:
+            rows = await self._call(
+                "fills", self.client.user_trades(order.symbol, order_id=order.exchange_order_id)
+            )
+            qty = sum((_dec(r.get("qty")) for r in rows or []), Decimal("0"))
+            if qty > 0:
+                value = sum((_dec(r.get("qty")) * _dec(r.get("price")) for r in rows), Decimal("0"))
+                return replace(order, avg_fill_price=value / qty)
+        except Exception:
+            logger.warning("Fill price of %s not read back", order.client_order_id)
+        return order
 
     async def set_leverage(self, symbol: str, leverage: int) -> None:
         try:
@@ -375,7 +436,9 @@ class BinanceFuturesAdapter:
             raise self._write_error(exc) from exc
         if not isinstance(body, dict) or body.get("orderId") is None:
             raise AmbiguousOrderOutcome(f"unrecognised placement response: {str(body)[:200]}")
-        order = parse_order(body, rules.step_size)
+        if not body.get("symbol"):
+            body = {**body, "symbol": symbol}
+        order = await self._with_fill_price(parse_order(body, rules.step_size))
 
         if (
             order.filled_size > 0
@@ -386,6 +449,7 @@ class BinanceFuturesAdapter:
                 symbol,
                 request.side,
                 request.client_order_id,
+                order.filled_size * rules.step_size,
                 request.stop_loss_price,
                 request.take_profit_price,
             )
@@ -396,6 +460,7 @@ class BinanceFuturesAdapter:
         symbol: str,
         entry_side: str,
         coid: str,
+        qty: Decimal,
         stop: Decimal,
         take_profit: Decimal | None,
     ) -> None:
@@ -406,13 +471,9 @@ class BinanceFuturesAdapter:
             await self._call(
                 "protective_stop",
                 self.client.new_algo_order(
-                    symbol=symbol,
-                    side=exit_side,
-                    type="STOP_MARKET",
-                    triggerPrice=self._price(symbol, stop),
-                    closePosition="true",
-                    workingType=WORKING_TYPE,
-                    clientAlgoId=sl_client_id(coid),
+                    **self._exit_order(
+                        symbol, exit_side, "STOP_MARKET", stop, qty, sl_client_id(coid)
+                    )
                 ),
             )
         except Exception:
@@ -423,13 +484,9 @@ class BinanceFuturesAdapter:
             await self._call(
                 "take_profit",
                 self.client.new_algo_order(
-                    symbol=symbol,
-                    side=exit_side,
-                    type="TAKE_PROFIT_MARKET",
-                    triggerPrice=self._price(symbol, take_profit),
-                    closePosition="true",
-                    workingType=WORKING_TYPE,
-                    clientAlgoId=f"{coid}T0",
+                    **self._exit_order(
+                        symbol, exit_side, "TAKE_PROFIT_MARKET", take_profit, qty, f"{coid}T0"
+                    )
                 ),
             )
         except Exception:
@@ -575,7 +632,7 @@ class BinanceFuturesAdapter:
     async def place_protective_stop(
         self, symbol: str, side: str, size: Decimal, stop_price: Decimal, client_order_id: str
     ) -> ExchangeOrder:
-        """A standalone ``closePosition`` stop (``side`` is the exit side)."""
+        """A standalone reduce-only stop for the whole position (``side`` is the exit side)."""
         try:
             existing = [
                 o
@@ -586,17 +643,19 @@ class BinanceFuturesAdapter:
             existing = []
         previous = existing[0].get("clientAlgoId") if existing else None
         caid = sl_client_id(client_order_id, previous)
+        qty = self._qty(symbol, size)
+        try:  # cover what is actually open, not what was asked for
+            rows = await self._call("positions", self.client.position_risk(symbol))
+            held = abs(sum((_dec(r.get("positionAmt")) for r in rows or []), Decimal("0")))
+            if held > 0:
+                qty = held
+        except Exception:
+            pass
         try:
             body = await self._call(
                 "protective_stop",
                 self.client.new_algo_order(
-                    symbol=symbol,
-                    side=side.upper(),
-                    type="STOP_MARKET",
-                    triggerPrice=self._price(symbol, stop_price),
-                    closePosition="true",
-                    workingType=WORKING_TYPE,
-                    clientAlgoId=caid,
+                    **self._exit_order(symbol, side, "STOP_MARKET", stop_price, qty, caid)
                 ),
             )
         except Exception as exc:
@@ -679,13 +738,14 @@ class BinanceFuturesAdapter:
             await self._call(
                 "amend_stop",
                 self.client.new_algo_order(
-                    symbol=symbol,
-                    side="SELL" if amount > 0 else "BUY",
-                    type="STOP_MARKET",
-                    triggerPrice=self._price(symbol, stop_price),
-                    closePosition="true",
-                    workingType=WORKING_TYPE,
-                    clientAlgoId=sl_client_id(client_order_id, previous),
+                    **self._exit_order(
+                        symbol,
+                        "SELL" if amount > 0 else "BUY",
+                        "STOP_MARKET",
+                        stop_price,
+                        abs(amount),
+                        sl_client_id(client_order_id, previous),
+                    )
                 ),
             )
         except Exception as exc:

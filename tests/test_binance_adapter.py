@@ -118,8 +118,8 @@ class FakeClient:
             "orderType": p["type"],
             "triggerPrice": str(p["triggerPrice"]),
             "algoStatus": "NEW",
-            "quantity": "0",
-            "closePosition": True,
+            "quantity": str(p["quantity"]),
+            "reduceOnly": True,
         }
         self.next_algo += 1
         self.algos.append(row)
@@ -159,6 +159,19 @@ class FakeClient:
         if raw is None:
             raise api_error(400, -2013, "Order does not exist.")
         return raw
+
+    async def multi_assets_mode(self):
+        return getattr(self, "multi", False)
+
+    async def set_single_asset_mode(self):
+        self.calls.append(("set_single_asset_mode", {}))
+        self.multi = False
+
+    async def position_mode(self):
+        return False
+
+    async def user_trades(self, symbol, order_id=None, start_time_ms=None, limit=1000):
+        return [{"qty": "2", "price": "100"}, {"qty": "3", "price": "101"}]
 
     async def account(self):
         return {"totalMarginBalance": "10012.5", "availableBalance": "9000"}
@@ -205,12 +218,43 @@ async def test_filled_entry_gets_stop_and_target_before_returning():
     assert entry["quantity"] == Decimal("5") and entry["price"] == Decimal("100.12")
     stop, target = [p for n, p in fake.calls if n == "new_algo_order"]
     assert stop["type"] == "STOP_MARKET" and stop["side"] == "SELL"
-    assert stop["closePosition"] == "true" and stop["triggerPrice"] == Decimal("95.02")
+    assert stop["reduceOnly"] == "true" and "closePosition" not in stop
+    assert stop["quantity"] == Decimal("5") and stop["triggerPrice"] == Decimal("95.02")
     assert stop["clientAlgoId"] == COID + "S0" and len(stop["clientAlgoId"]) <= 36
     assert target["type"] == "TAKE_PROFIT_MARKET" and target["clientAlgoId"] == COID + "T0"
     position = (await adapter_with(fake).positions())[0]
     assert position.has_stop_loss and position.has_take_profit
     assert position.size == 5 and position.stop_loss_price == Decimal("95.02")
+
+
+async def test_amended_stop_covers_the_open_quantity():
+    fake = FakeClient()
+    adapter = adapter_with(fake)
+    await adapter.place_order(request(take_profit_price=None))
+    await adapter.amend_stop("SOLUSDT", COID, Decimal("97.5"))
+    new = [p for n, p in fake.calls if n == "new_algo_order"][-1]
+    assert new["reduceOnly"] == "true" and new["quantity"] == Decimal("5")
+
+
+async def test_prepare_switches_off_multi_assets_mode():
+    fake = FakeClient()
+    fake.multi = True
+    await adapter_with(fake).prepare()
+    assert "set_single_asset_mode" in names(fake)
+
+
+async def test_missing_fill_price_is_read_back_from_the_fills():
+    fake = FakeClient()
+    original = fake.new_order
+
+    async def no_avg(**p):
+        raw = await original(**p)
+        raw["avgPrice"] = "0.0000"
+        return raw
+
+    fake.new_order = no_avg
+    order = await adapter_with(fake).place_order(request())
+    assert order.avg_fill_price == Decimal("100.6")  # (2*100 + 3*101) / 5
 
 
 async def test_unfilled_ioc_attaches_nothing():
