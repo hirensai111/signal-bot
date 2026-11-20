@@ -945,6 +945,31 @@ class BinanceStreamBridge:
     async def on_connect(self) -> None:
         metrics.EXCHANGE_STREAM_CONNECTED.labels(VENUE).set(1)
         await self.bus.publish(Event.create(EventType.STREAM_CONNECTED, {"venue": VENUE}, VENUE))
+        await self.publish_position_snapshot()
+
+    async def publish_position_snapshot(self) -> None:
+        """Binance pushes a position only when it changes (Delta sends a snapshot on
+        subscribe), so after a (re)connect the open positions are read once and published;
+        otherwise the position view stays empty until something moves."""
+        try:
+            positions = await self.adapter.positions()
+        except Exception:
+            logger.exception("Binance position snapshot after connect failed")
+            return
+        now = datetime.now(timezone.utc)
+        for pos in positions:
+            payload = replace(pos, updated_at=now).to_payload(VENUE)
+            await self.bus.publish(
+                Event.create(
+                    EventType.EXCHANGE_POSITION_UPDATE,
+                    payload,
+                    source=VENUE,
+                    event_id=deterministic_event_id(
+                        VENUE, "position_snapshot", pos.symbol, pos.size, now.isoformat()
+                    ),
+                    occurred_at=now,
+                )
+            )
 
     async def on_disconnect(self, reason: str) -> None:
         metrics.EXCHANGE_STREAM_CONNECTED.labels(VENUE).set(0)

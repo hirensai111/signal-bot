@@ -442,6 +442,25 @@ async def test_bridge_sweeps_a_symbol_that_went_flat(monkeypatch):
     assert fake.algos == []
 
 
+async def test_connect_publishes_the_open_positions():
+    fake = FakeClient()
+    adapter = adapter_with(fake)
+    await adapter.place_order(request())  # 5 SOL long with its stop
+
+    published = []
+
+    class Bus:
+        async def publish(self, event):
+            published.append(event)
+
+    await BinanceStreamBridge(Bus(), adapter).on_connect()
+    positions = [e for e in published if e.event_type == EventType.EXCHANGE_POSITION_UPDATE]
+    assert len(positions) == 1
+    assert positions[0].payload["symbol"] == "SOLUSDT"
+    assert Decimal(positions[0].payload["size"]) == 5
+    assert positions[0].payload["has_stop_loss"] is True
+
+
 # ---------------------------------------------------------------------------
 # client helpers and configuration
 # ---------------------------------------------------------------------------
