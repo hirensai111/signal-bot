@@ -163,8 +163,12 @@ class StatusService:
             for o in rows
         ]
 
-    async def trades(self, limit: int = 30) -> list[dict[str, Any]] | dict:
-        """Recently closed trades, newest first, with net P&L and realised R."""
+    async def trades(self, limit: int = 500) -> list[dict[str, Any]] | dict:
+        """Closed trades, newest first, with net P&L and realised R.
+
+        500 covers the whole forward test (a few trades a week), so the control room
+        shows every earlier closed trade and a complete closed-trade P&L curve.
+        """
         try:
             async with self.session_factory() as session:
                 rows = await session.execute(
