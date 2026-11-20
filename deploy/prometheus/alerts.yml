@@ -20,7 +20,9 @@ groups:
           summary: "Signal bot restarted in the last 15 minutes"
           action: "Check the logs for a crash (Grafana > Logs, level=CRITICAL). Startup reconciliation re-derives orders and stops."
       - alert: NotPaperTrading
-        expr: signalbot_build_info{exec_mode!="paper"} == 1
+        # The Binance demo bot (bot-bn) runs live against Binance *demo* trading (practice
+        # funds): delta_mode carries BINANCE_TRADE_MODE there, so demo is exempt.
+        expr: signalbot_build_info{exec_mode!="paper", delta_mode!="demo"} == 1
         labels: {severity: critical, component: bot}
         annotations:
           summary: "The paper deployment is running with exec_mode={{ $labels.exec_mode }}"

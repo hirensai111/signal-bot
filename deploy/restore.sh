@@ -6,10 +6,11 @@
 # Stops the bot, restores into the running postgres service, restores the paper broker
 # state if given, then starts the bot again.  The current database is replaced.
 set -euo pipefail
-dump=${1:?usage: deploy/restore.sh <signal_bot-*.dump | signal_bot_tp-*.dump | signal_bot_tp2-*.dump> [paper_state-*.json]}
+dump=${1:?usage: deploy/restore.sh <signal_bot-*.dump | signal_bot_tp-*.dump | signal_bot_tp2-*.dump | signal_bot_bn-*.dump> [paper_state-*.json]}
 state=${2:-}
 [ -f "$dump" ] || { echo "no such dump: $dump" >&2; exit 1; }
 case "$(basename "$dump")" in
+  signal_bot_bn-*) db=signal_bot_bn; service=bot-bn; compose=(docker compose --profile bn) ;;
   signal_bot_tp2-*) db=signal_bot_tp2; service=bot-tp2; compose=(docker compose --profile tp2) ;;
   signal_bot_tp-*) db=signal_bot_tp; service=bot-tp; compose=(docker compose --profile tp) ;;
   *) db=signal_bot; service=bot; compose=(docker compose) ;;

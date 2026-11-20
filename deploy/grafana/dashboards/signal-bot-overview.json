@@ -38,7 +38,7 @@
     "name": "bot",
     "label": "Bot",
     "type": "custom",
-    "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp,TP 1.5R + pause : bot-tp2",
+    "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp,TP 1.5R + pause : bot-tp2,Binance demo 1% : bot-bn",
     "current": {
      "text": "Main (trailing stop)",
      "value": "bot"
@@ -57,6 +57,11 @@
      {
       "text": "TP 1.5R + pause",
       "value": "bot-tp2",
+      "selected": false
+     },
+     {
+      "text": "Binance demo 1%",
+      "value": "bot-bn",
       "selected": false
      }
     ]

@@ -85,6 +85,32 @@ async def test_orphan_order_with_our_prefix_alerts(h):
     assert {"kind": "orphan_order", "order": "sig_deadbeef"} in h.reconciler.last_discrepancies
 
 
+async def test_stops_named_after_an_open_entry_are_not_orphans(h):
+    from signal_bot.tracking.reconciliation import protective_parent_id
+
+    h.config.order_type = "limit"
+    sig = await h.make_signal()
+    await h.submit(sig)
+    parent = (await h.order_for(sig)).client_order_id
+    assert protective_parent_id(parent + "S0") == parent
+    assert protective_parent_id(parent + "X") is None and protective_parent_id(parent) is None
+    await h.venue.place_order(
+        OrderRequest(parent + "S0", "BTCUSD", "sell", Decimal("1"), "limit", Decimal("70000"))
+    )
+    await h.reconciler.reconcile_now()
+    assert not any(d["kind"] == "orphan_order" for d in h.reconciler.last_discrepancies)
+
+
+async def test_a_stop_whose_entry_is_unknown_still_alerts(h):
+    h.config.order_type = "limit"
+    ghost = "sig_" + "0" * 28 + "S0"
+    await h.venue.place_order(
+        OrderRequest(ghost, "BTCUSD", "sell", Decimal("1"), "limit", Decimal("70000"))
+    )
+    await h.reconciler.reconcile_now()
+    assert {"kind": "orphan_order", "order": ghost} in h.reconciler.last_discrepancies
+
+
 async def test_pending_order_never_sent_is_cancelled_after_grace(h):
     sig = await h.make_signal()
     await h.store.create(

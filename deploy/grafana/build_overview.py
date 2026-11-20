@@ -898,12 +898,13 @@ FROM signals WHERE strategy = 'trend_breakout' ORDER BY created_at DESC LIMIT 30
                     "label": "Bot",
                     "type": "custom",
                     "query": "Main (trailing stop) : bot,TP 1.5R (fixed exit) : bot-tp,"
-                    "TP 1.5R + pause : bot-tp2",
+                    "TP 1.5R + pause : bot-tp2,Binance demo 1% : bot-bn",
                     "current": {"text": "Main (trailing stop)", "value": "bot"},
                     "options": [
                         {"text": "Main (trailing stop)", "value": "bot", "selected": True},
                         {"text": "TP 1.5R (fixed exit)", "value": "bot-tp", "selected": False},
                         {"text": "TP 1.5R + pause", "value": "bot-tp2", "selected": False},
+                        {"text": "Binance demo 1%", "value": "bot-bn", "selected": False},
                     ],
                 },
                 {

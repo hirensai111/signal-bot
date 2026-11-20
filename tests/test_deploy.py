@@ -137,6 +137,14 @@ def test_binance_demo_bot_is_optional_pinned_to_demo_and_separate():
     assert "tp tp2 bn" in (ROOT / "deploy/backup/backup.sh").read_text()
     assert '"bot-bn"' in (ROOT / "deploy/prometheus/prometheus.yml").read_text()
     assert "bn:bot-bn" in (ROOT / "deploy/update.sh").read_text()
+    # visible in Grafana (bot selector, trade database, logs) and tagged in alerts
+    sources = (ROOT / "deploy/grafana/provisioning/datasources/datasources.yml").read_text()
+    assert "database: signal_bot_bn" in sources
+    for board in ("signal-bot.json", "signal-bot-overview.json"):
+        assert ": bot-bn" in (ROOT / "deploy/grafana/dashboards" / board).read_text(), board
+    assert "bot-tp2|bot-bn" in (ROOT / "deploy/alloy/config.alloy").read_text()
+    assert '"bot-bn:8080"' in (ROOT / "deploy/alertmanager/telegram.tmpl").read_text()
+    assert "signal_bot_bn-*)" in (ROOT / "deploy/restore.sh").read_text()
 
 
 def test_third_paper_bot_copies_the_second_and_changes_only_its_account_rules():

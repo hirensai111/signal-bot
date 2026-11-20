@@ -36,6 +36,24 @@ from signal_bot.execution.order_store import OrderStore, local_event_id
 from signal_bot.execution.orders import OrderState
 from signal_bot.observability import metrics
 
+# client_order_id_for() gives CLIENT_ORDER_PREFIX + 28 hex characters; venues without
+# brackets name an entry's exit orders after it with a two-character suffix.
+_ENTRY_ID_LENGTH = len(CLIENT_ORDER_PREFIX) + 28
+
+
+def protective_parent_id(client_order_id: str) -> str | None:
+    """The entry an exit order belongs to (``<coid>S0`` / ``S1`` / ``T0`` -> ``<coid>``)."""
+    tag = client_order_id[_ENTRY_ID_LENGTH:]
+    if (
+        len(client_order_id) == _ENTRY_ID_LENGTH + 2
+        and client_order_id.startswith(CLIENT_ORDER_PREFIX)
+        and tag[0] in "ST"
+        and tag[1].isdigit()
+    ):
+        return client_order_id[:_ENTRY_ID_LENGTH]
+    return None
+
+
 logger = logging.getLogger(__name__)
 
 S = OrderState
@@ -290,6 +308,13 @@ class Reconciler:
         for vo in venue_open:
             if not vo.client_order_id.startswith(CLIENT_ORDER_PREFIX):
                 continue
+            parent_id = protective_parent_id(vo.client_order_id)
+            if parent_id is not None:
+                # A venue's own stop/target for one of our entries (Binance names them
+                # <coid>S0 / S1 / T0): fine while that position is open, a leftover after.
+                parent = await self.store.get_by_client_id(parent_id)
+                if parent is not None and parent.state != OrderState.CLOSED:
+                    continue
             if await self.store.get_by_client_id(vo.client_order_id) is None:
                 metrics.RECONCILIATION_DISCREPANCIES.labels("orphan_order").inc()
                 found.append({"kind": "orphan_order", "order": vo.client_order_id})

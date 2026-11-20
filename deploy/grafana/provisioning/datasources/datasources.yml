@@ -52,6 +52,19 @@ datasources:
       maxOpenConns: 4
     secureJsonData:
       password: $GRAFANA_DB_PASSWORD
+  # The Binance demo bot's database (compose profile "bn"); empty until that bot trades.
+  - name: Signal Bot DB (Binance demo 1%)
+    uid: signalbot-db-bn
+    type: grafana-postgresql-datasource
+    url: postgres:5432
+    user: grafana_ro
+    jsonData:
+      database: signal_bot_bn
+      sslmode: disable
+      postgresVersion: 1600
+      maxOpenConns: 4
+    secureJsonData:
+      password: $GRAFANA_DB_PASSWORD
   - name: Alertmanager
     uid: alertmanager
     type: alertmanager
