@@ -128,7 +128,7 @@ def test_binance_demo_bot_is_optional_pinned_to_demo_and_separate():
     # demo trading is pinned in compose, not taken from .env; production stays refused
     assert env["EXEC_VENUE"] == "binance" and env["BINANCE_TRADE_MODE"] == "demo"
     assert env["EXEC_MODE"] == "live" and env["LIVE_TRADING_ACKNOWLEDGED"] == "false"
-    assert env["STRATEGY_CONFIG"].endswith("trend_portfolio.toml")
+    assert env["STRATEGY_CONFIG"].endswith("trend_portfolio_1pct.toml")
     assert env["DATABASE_URL"].endswith("/signal_bot_bn")
     assert env["TELEGRAM_COMMANDS"] == "false" and env["BOT_LABEL"]
     assert bn["volumes"] != main["volumes"] and "botdata-bn" in compose["volumes"]

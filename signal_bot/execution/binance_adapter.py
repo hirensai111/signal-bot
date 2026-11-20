@@ -708,7 +708,8 @@ class BinanceFuturesAdapter:
         except Exception as exc:
             raise self._write_error(exc) from exc
         await self.sweep_conditional_orders(symbol)
-        return replace(parse_order(body, self._step(symbol)), purpose=FillPurpose.CLOSE)
+        closed = await self._with_fill_price(parse_order(body, self._step(symbol)))
+        return replace(closed, purpose=FillPurpose.CLOSE)
 
     async def amend_stop(
         self, symbol: str, client_order_id: str, stop_price: Decimal

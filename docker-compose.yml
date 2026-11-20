@@ -133,8 +133,9 @@ services:
     stop_grace_period: 30s
     logging: *logging
 
-  # Optional Binance demo bot: the main strategy (trend_portfolio.toml) placing real orders
-  # on Binance USD-M futures DEMO TRADING (demo-fapi.binance.com, practice funds).  Signals
+  # Optional Binance demo bot: the main strategy at 1% risk with every account rule doubled
+  # (trend_portfolio_1pct.toml), placing real orders on Binance USD-M futures DEMO TRADING
+  # (demo-fapi.binance.com, practice funds), next to the three 0.5% paper bots.  Signals
   # still come from production Binance market data.  BINANCE_TRADE_MODE is pinned to demo
   # here and never read from .env; the keys are BINANCE_FUTURES_API_KEY / _SECRET in .env.
   # Own database signal_bot_bn, state volume and control room on 8083.  Off unless the
@@ -146,7 +147,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://signalbot:${POSTGRES_PASSWORD}@postgres:5432/signal_bot_bn
-      STRATEGY_CONFIG: signal_bot/research/strategies/trend_portfolio.toml
+      STRATEGY_CONFIG: signal_bot/research/strategies/trend_portfolio_1pct.toml
       EXEC_MODE: live
       EXEC_VENUE: binance
       BINANCE_TRADE_MODE: demo
@@ -155,7 +156,7 @@ services:
       OPS_HOST: 0.0.0.0
       LOG_FORMAT: json
       PAPER_STATE_PATH: /home/bot/data/paper_state.json
-      BOT_LABEL: "Binance demo"
+      BOT_LABEL: "Binance demo 1%"
       TELEGRAM_COMMANDS: "false"
     volumes: [botdata-bn:/home/bot/data]
     depends_on:

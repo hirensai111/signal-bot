@@ -197,7 +197,13 @@ def test_return_correlations_are_causal_and_need_enough_overlap():
 
 
 @pytest.mark.parametrize(
-    "name", ["trend_portfolio", "trend_portfolio_tp15", "trend_portfolio_tp15_pause"]
+    "name",
+    [
+        "trend_portfolio",
+        "trend_portfolio_tp15",
+        "trend_portfolio_tp15_pause",
+        "trend_portfolio_1pct",
+    ],
 )
 def test_portfolio_config_runs_the_frozen_pre_registered_signal(name):
     with open(f"signal_bot/research/strategies/{name}.toml", "rb") as fh:
@@ -208,6 +214,21 @@ def test_portfolio_config_runs_the_frozen_pre_registered_signal(name):
     assert portfolio["strategy"] == signal["strategy"] == "trend_breakout"
     PortfolioLimits.from_mapping(portfolio["portfolio"])  # every key is a real limit
     assert set(portfolio["portfolio"]) <= set(PortfolioLimits().to_dict())
+
+
+def test_one_percent_config_doubles_every_account_rule_and_nothing_else():
+    def load(name):
+        with open(f"signal_bot/research/strategies/{name}.toml", "rb") as fh:
+            return tomllib.load(fh)
+
+    base, double = load("trend_portfolio"), load("trend_portfolio_1pct")
+    doubled = ("risk_per_trade", "max_open_risk", "max_correlated_risk")
+    doubled += ("drawdown_reduce", "drawdown_halt")
+    for key, value in base["portfolio"].items():
+        expected = value * 2 if key in doubled else value
+        assert double["portfolio"][key] == pytest.approx(expected), key
+    assert double["params"] == base["params"] and double["universe"] == base["universe"]
+    assert double["costs"] == base["costs"]
 
 
 def test_governor_defaults_follow_the_portfolio_and_keep_stricter_operator_caps():

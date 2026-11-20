@@ -239,10 +239,11 @@ trade database. Alerts start with `[TP 1.5R + pause bot]`. Backups add
 **Turn it off:** set `COMPOSE_PROFILES=tp` in `.env` and run
 `sudo docker compose --profile tp2 stop bot-tp2`. Its database and volume are kept.
 
-## Binance demo bot (main strategy on Binance futures demo trading)
+## Binance demo bot (main strategy at 1% risk on Binance futures demo trading)
 
-An optional fourth bot runs the **main strategy** with real orders on **Binance USD-M
-futures demo trading** (`demo-fapi.binance.com`, practice funds). It is the first test of
+An optional fourth bot runs the **main strategy at 1% risk** (`trend_portfolio_1pct.toml`:
+every account rule doubled, as backtested in docs/research.md) with real orders on
+**Binance USD-M futures demo trading** (`demo-fapi.binance.com`, practice funds). It is the first test of
 the order path on a real exchange: fills, slippage, the stop orders, moving the stop, and
 the account stream. Signals still come from production Binance market data, exactly as for
 the paper bots.
@@ -250,11 +251,11 @@ the paper bots.
 | | Main paper bot (`bot`) | Binance demo bot (`bot-bn`) |
 |---|---|---|
 | Orders | simulated on Delta's live books | real orders on Binance futures **demo** |
-| Strategy | `trend_portfolio.toml` | the same |
-| Account | $10,000 paper | the demo account's balance |
+| Strategy | `trend_portfolio.toml`, 0.5% risk | `trend_portfolio_1pct.toml`: same entries and exit, 1% risk, 6% / 4% risk caps, risk halved at 20% down, halt at 40% |
+| Account | $10,000 paper | the demo account's USDT (single-asset mode; about $5,000) |
 | Database / state | `signal_bot`, `botdata` | `signal_bot_bn`, `botdata-bn` |
 | Control room | `127.0.0.1:8080` | `127.0.0.1:8083` |
-| Telegram | answers `/status` | tagged `[Binance demo]`, send-only |
+| Telegram | answers `/status` | tagged `[Binance demo 1%]`, send-only |
 
 `BINANCE_TRADE_MODE=demo` is pinned in `docker-compose.yml`, not read from `.env`, and
 production would still need `LIVE_TRADING_ACKNOWLEDGED=true`.
@@ -304,7 +305,7 @@ sudo docker compose up -d
 sudo tailscale serve --bg --https=8446 http://127.0.0.1:8083
 ```
 
-Watch it on `:8446`, in Grafana (Bot selector) and in Telegram (`[Binance demo]`).
+Watch it on `:8446`, in Grafana (Bot selector) and in Telegram (`[Binance demo 1%]`).
 Backups add `signal_bot_bn-<stamp>.dump`.
 
 **Turn it off:** remove `bn` from `COMPOSE_PROFILES` and run
