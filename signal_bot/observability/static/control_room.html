@@ -2,833 +2,1381 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0c0f">
 <title>Signal Bot control room</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 :root {
-  color-scheme: light;
-  --plane: #eef1f0;
-  --surface: #fbfcfb;
-  --surface-2: #f3f6f5;
-  --ink: #1b2a26;
-  --ink-2: #4b5a55;
-  --muted: #74817c;
-  --rule: #d5dcd9;
-  --rule-strong: #b7c2be;
-  --accent: #1d4e89;
-  --accent-soft: #dbe6f3;
-  --series-1: #2a78d6;
-  --grid: #e3e8e6;
-  --good: #0ca30c;
-  --good-ink: #006300;
-  --warning: #fab219;
-  --serious: #ec835a;
-  --critical: #d03b3b;
-  --critical-ink: #a32424;
-  --critical-wash: #fbe9e8;
-  --lever: #b42d2d;
-  --lever-ink: #ffffff;
-  --focus: #1d4e89;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --plane: #0f1715;
-    --surface: #16201d;
-    --surface-2: #1c2825;
-    --ink: #e6ece9;
-    --ink-2: #b9c4c0;
-    --muted: #8a9893;
-    --rule: #2a3733;
-    --rule-strong: #3a4945;
-    --accent: #8fb4e6;
-    --accent-soft: #1f3046;
-    --series-1: #3987e5;
-    --grid: #22302c;
-    --good-ink: #3fc33f;
-    --critical-ink: #f08a8a;
-    --critical-wash: #3a1f1f;
-    --lever: #d03b3b;
-    --focus: #8fb4e6;
-  }
-}
-:root[data-theme="dark"] {
   color-scheme: dark;
-  --plane: #0f1715;
-  --surface: #16201d;
-  --surface-2: #1c2825;
-  --ink: #e6ece9;
-  --ink-2: #b9c4c0;
-  --muted: #8a9893;
-  --rule: #2a3733;
-  --rule-strong: #3a4945;
-  --accent: #8fb4e6;
-  --accent-soft: #1f3046;
-  --series-1: #3987e5;
-  --grid: #22302c;
-  --good-ink: #3fc33f;
-  --critical-ink: #f08a8a;
-  --critical-wash: #3a1f1f;
-  --lever: #d03b3b;
-  --focus: #8fb4e6;
+  --bg: #0a0c0f;
+  --panel: #101318;
+  --panel-2: #151920;
+  --raise: #1b2029;
+  --line: #222832;
+  --line-2: #2c3340;
+  --text: #e7e9ec;
+  --text-2: #a0a8b3;
+  --text-3: #6c7480;
+  --up: #26b07f;
+  --up-soft: rgba(38, 176, 127, 0.14);
+  --down: #e8615f;
+  --down-soft: rgba(232, 97, 95, 0.14);
+  --warn: #d9a23a;
+  --warn-soft: rgba(217, 162, 58, 0.14);
+  --accent: #5b9dff;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --r-sm: 4px;
+  --r-md: 8px;
 }
-
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { background: var(--bg); -webkit-text-size-adjust: 100%; }
 body {
-  margin: 0;
-  background: var(--plane);
-  color: var(--ink);
-  font: 400 15px/1.5 "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 400 14px/1.5 var(--font-body); -webkit-font-smoothing: antialiased;
 }
-.cond { font-family: "Barlow Semi Condensed", "Barlow", system-ui, sans-serif; }
-.num { font-variant-numeric: tabular-nums; }
-a { color: var(--accent); }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.num, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.up { color: var(--up); }
+.down { color: var(--down); }
+.dim { color: var(--text-3); }
+.wrap {
+  max-width: 1480px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
 
-.page { max-width: 1320px; margin: 0 auto; padding: 20px 16px 48px; }
+/* ---------- command bar ---------- */
+.bar {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border-bottom: 1px solid var(--line);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.bar .wrap { display: flex; align-items: center; gap: 8px 14px; padding-block: 10px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand-mark { width: 28px; height: 28px; border-radius: 6px; background: var(--accent); display: grid; place-items: center; flex: none; }
+.brand-name { font: 600 16px/1.1 var(--font-display); letter-spacing: 0.01em; white-space: nowrap; }
+.brand-sub { font: 500 11px/1.25 var(--font-mono); color: var(--text-3); letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap; }
+.spacer { flex: 1; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+  font: 500 11.5px/1.4 var(--font-mono); letter-spacing: 0.03em; white-space: nowrap;
+  border: 1px solid var(--line-2); color: var(--text-2);
+}
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.pill.up { color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, transparent); }
+.pill.down { color: var(--down); border-color: color-mix(in srgb, var(--down) 45%, transparent); }
+.pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.pill.acc { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.pill.solid.up { background: var(--up-soft); }
+.pill.solid.down { background: var(--down-soft); }
+.pill.solid.warn { background: var(--warn-soft); }
+.status-pill { font-size: 12px; padding: 4px 11px; }
+.status-pill.live .dot { animation: beat 2.4s var(--ease-out) infinite; }
+@keyframes beat {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--up) 60%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 6px transparent; }
+}
+.clock { font: 400 11.5px/1.3 var(--font-mono); color: var(--text-3); white-space: nowrap; text-align: right; }
+.clock .stale { color: var(--down); }
+.halt-jump {
+  font: 600 12px/1 var(--font-display); letter-spacing: 0.06em; text-transform: uppercase; text-decoration: none;
+  color: var(--down); border: 1px solid color-mix(in srgb, var(--down) 50%, transparent);
+  border-radius: var(--r-sm); padding: 6px 9px; white-space: nowrap;
+}
+.halt-jump:hover { background: var(--down-soft); }
 
-/* ---- header ---------------------------------------------------------- */
-.masthead {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
-  padding-bottom: 14px; border-bottom: 1px solid var(--rule-strong);
-}
-.masthead h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.01em; }
-.env {
-  font-family: "Barlow Semi Condensed", sans-serif; font-weight: 700; font-size: 14px;
-  padding: 1px 10px; border-radius: 3px; border: 2px solid var(--accent); color: var(--accent);
-}
-.env[data-env="live"] { border-color: var(--critical); color: var(--critical-ink); background: var(--critical-wash); }
-.meta { color: var(--ink-2); font-size: 14px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
-.meta span { white-space: nowrap; }
-.meta .stale { color: var(--critical-ink); font-weight: 600; }
+/* ---------- alert ribbon ---------- */
+.ribbon { border-bottom: 1px solid var(--line); background: var(--panel); }
+.ribbon .wrap { display: flex; gap: 4px 12px; align-items: baseline; padding-block: 10px; flex-wrap: wrap; }
+.ribbon b { font: 600 15px/1.25 var(--font-display); letter-spacing: 0.01em; }
+.ribbon span { color: var(--text-2); font-size: 13px; }
+.ribbon[data-tone="down"] { background: linear-gradient(90deg, var(--down-soft), transparent 70%), var(--panel); border-bottom-color: color-mix(in srgb, var(--down) 40%, transparent); }
+.ribbon[data-tone="down"] b { color: var(--down); }
+.ribbon[data-tone="warn"] { background: linear-gradient(90deg, var(--warn-soft), transparent 70%), var(--panel); }
+.ribbon[data-tone="warn"] b { color: var(--warn); }
+.ribbon[data-tone="mute"] b { color: var(--text-2); }
 
-/* ---- aspect banner (the one bold element) ---------------------------- */
-.layout {
-  display: grid; gap: 18px; margin-top: 18px; align-items: start;
-  grid-template-columns: minmax(0, 1fr) 340px;
-}
-.main-col, .side-stack { display: grid; gap: 18px; align-content: start; min-width: 0; }
-.full { grid-column: 1 / -1; }
-.aspect {
-  display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center;
-  padding: 18px 22px; background: var(--surface); border: 1px solid var(--rule);
-  border-left: 8px solid var(--aspect, var(--muted)); border-radius: 4px;
-}
-.lamp {
-  width: 56px; height: 56px; border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--aspect, var(--muted)) 55%, white), var(--aspect, var(--muted)) 62%);
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--aspect, var(--muted)) 18%, transparent), inset 0 -3px 6px rgb(0 0 0 / 0.18);
-}
-.aspect h2 {
-  margin: 0; font-family: "Barlow Semi Condensed", sans-serif; font-weight: 700;
-  font-size: clamp(28px, 4vw, 44px); line-height: 1.05; letter-spacing: -0.005em;
-}
-.aspect p { margin: 6px 0 0; color: var(--ink-2); max-width: 70ch; }
-.aspect[data-state="healthy"] { --aspect: var(--good); }
-.aspect[data-state="degraded"] { --aspect: var(--warning); }
-.aspect[data-state="halted"], .aspect[data-state="failed"] { --aspect: var(--critical); }
-.aspect[data-state="unreachable"] { --aspect: var(--muted); }
-
-/* ---- KPI strip ------------------------------------------------------- */
+/* ---------- KPI tape ---------- */
+main { padding-block: 16px 40px; }
 .kpis {
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-  background: var(--surface); border: 1px solid var(--rule); border-radius: 4px;
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px;
+  background: var(--line); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden;
 }
-.kpi { padding: 14px 18px 16px; border-left: 1px solid var(--rule); min-width: 0; }
-.kpi:first-child { border-left: 0; }
-.kpi .label { color: var(--ink-2); font-size: 14px; }
-.kpi .value { font-family: "Barlow Semi Condensed", sans-serif; font-weight: 600; font-size: 32px; line-height: 1.1; margin-top: 2px; }
-.kpi .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
-.kpi .sub.up { color: var(--good-ink); }
-.kpi .sub.down { color: var(--critical-ink); }
-.meter { height: 8px; border-radius: 4px; background: var(--accent-soft); margin-top: 10px; overflow: hidden; }
-.meter > i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--accent); transition: width 300ms ease; }
-.meter[data-level="warning"] > i { background: var(--warning); }
-.meter[data-level="critical"] > i { background: var(--critical); }
+.kpi { background: var(--panel); padding: 12px 14px 13px; min-width: 0; }
+.kpi .k { font: 500 10.5px/1.3 var(--font-mono); color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi .v { font: 500 21px/1.25 var(--font-mono); margin-top: 5px; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.kpi.hero .v { font-size: 26px; font-weight: 600; }
+.kpi .s { font: 400 11px/1.4 var(--font-mono); color: var(--text-3); margin-top: 3px; text-wrap: pretty; }
+.kpi .s.up { color: var(--up); }
+.kpi .s.down { color: var(--down); }
+.kpi .v.flash-up { animation: flash-up 900ms var(--ease-out); }
+.kpi .v.flash-down { animation: flash-down 900ms var(--ease-out); }
+@keyframes flash-up { from { color: var(--up); } }
+@keyframes flash-down { from { color: var(--down); } }
+.mini { height: 4px; border-radius: 2px; background: var(--raise); margin-top: 8px; position: relative; }
+.mini > i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--accent); width: 0; transition: width 400ms var(--ease-out); }
+.mini > b { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--warn); }
+.mini[data-level="warn"] > i { background: var(--warn); }
+.mini[data-level="over"] > i { background: var(--down); }
 
-/* ---- panels ---------------------------------------------------------- */
-.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 16px 18px; min-width: 0; }
-.panel h3 { margin: 0 0 10px; font-size: 17px; font-weight: 600; }
-.panel .hint { color: var(--muted); font-size: 13px; margin: -6px 0 10px; }
+/* ---------- layout ---------- */
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; margin-top: 14px; align-items: start; }
+.col { display: grid; gap: 14px; min-width: 0; align-content: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); min-width: 0; }
+.ph { display: flex; align-items: baseline; gap: 6px 12px; flex-wrap: wrap; padding: 12px 14px 0; }
+.ph h2 { margin: 0; font: 600 15px/1.2 var(--font-display); letter-spacing: 0.03em; text-transform: uppercase; }
+.ph .meta { font: 400 11.5px/1.3 var(--font-mono); color: var(--text-3); }
+.ph .right { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.pb { padding: 10px 14px 14px; }
+.hint { color: var(--text-3); font-size: 12px; margin: 0; }
+.empty { color: var(--text-3); padding: 22px 8px; text-align: center; font-size: 13px; }
 
-/* ---- halt lever ------------------------------------------------------ */
-.lever { border: 2px solid var(--lever); background: var(--surface); }
-.lever h3 { color: var(--critical-ink); }
-.lever label { display: block; font-size: 14px; color: var(--ink-2); margin: 10px 0 4px; }
-.lever input, .lever textarea {
-  width: 100%; font: inherit; color: var(--ink); background: var(--surface-2);
-  border: 1px solid var(--rule-strong); border-radius: 3px; padding: 7px 9px;
+/* ---------- equity chart ---------- */
+.chart-wrap { position: relative; padding: 4px 4px 6px 14px; }
+svg.chart { width: 100%; height: 250px; display: block; overflow: visible; }
+.chart .grid line { stroke: var(--line); stroke-width: 1; }
+.chart .axis text { fill: var(--text-3); font: 400 10.5px var(--font-mono); }
+.chart .base { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 3 4; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; }
+.chart .cross { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 2 3; }
+.chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+.chart .tag rect { fill: var(--accent); }
+.chart .tag text { fill: #06080b; font: 600 10.5px var(--font-mono); }
+.chart .hl text { font: 500 10px var(--font-mono); fill: var(--text-2); }
+.chart .note { font: 400 12px var(--font-mono); fill: var(--text-3); }
+.tooltip {
+  position: absolute; pointer-events: none; background: var(--raise); border: 1px solid var(--line-2);
+  border-radius: var(--r-sm); padding: 6px 9px; font: 400 11.5px/1.35 var(--font-mono);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); white-space: nowrap; color: var(--text-2);
 }
-.lever textarea { min-height: 58px; resize: vertical; }
-.btn {
-  font: 600 16px/1 "Barlow Semi Condensed", sans-serif; letter-spacing: 0.01em;
-  border-radius: 4px; padding: 12px 16px; cursor: pointer; border: 2px solid transparent; width: 100%; margin-top: 12px;
-}
-.btn-halt { background: var(--lever); color: var(--lever-ink); }
-.btn-halt:hover { filter: brightness(1.08); }
-.btn-resume { background: transparent; color: var(--ink); border-color: var(--rule-strong); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
-.result { font-size: 14px; margin-top: 10px; min-height: 1.5em; }
-.result.ok { color: var(--good-ink); }
-.result.err { color: var(--critical-ink); }
-details.resume { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 10px; }
-details.resume summary { cursor: pointer; font-weight: 600; }
+.tooltip b { display: block; font-size: 13px; color: var(--text); font-weight: 500; }
+.stat { font: 400 11.5px/1.3 var(--font-mono); color: var(--text-3); padding: 4px 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-sm); white-space: nowrap; }
+.stat b { color: var(--text); font-weight: 500; margin-left: 5px; }
+.stat b.up { color: var(--up); }
+.stat b.down { color: var(--down); }
 
-/* ---- interlocks ------------------------------------------------------ */
-.interlocks { list-style: none; margin: 0; padding: 0; }
-.interlocks li { display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; padding: 8px 0; border-top: 1px solid var(--rule); }
-.interlocks li:first-child { border-top: 0; padding-top: 0; }
-.interlocks .name { font-weight: 600; }
-.interlocks .detail { grid-column: 2; color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
-.status-icon { width: 18px; height: 18px; margin-top: 2px; }
-.breakers { margin: 10px 0 0; padding: 10px 12px; background: var(--critical-wash); border-radius: 3px; font-size: 14px; }
-.breakers b { color: var(--critical-ink); }
+/* ---------- tables ---------- */
+.tscroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; font: 500 10.5px/1.3 var(--font-mono); color: var(--text-3); text-transform: uppercase;
+  letter-spacing: 0.07em; padding: 9px 10px 7px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th:first-child, td:first-child { padding-left: 14px; }
+th:last-child, td:last-child { padding-right: 14px; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: color-mix(in srgb, var(--raise) 55%, transparent); }
+th.r, td.r { text-align: right; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sym { font: 600 13.5px/1.2 var(--font-mono); letter-spacing: 0.01em; white-space: nowrap; }
+.sym small { display: block; font: 400 10.5px/1.3 var(--font-mono); color: var(--text-3); letter-spacing: 0.02em; margin-top: 3px; white-space: normal; }
+.sym small.down { color: var(--down); }
+.dir { display: inline-block; font: 600 9.5px/1 var(--font-mono); letter-spacing: 0.08em; padding: 3px 5px; border-radius: 3px; vertical-align: 1px; margin-left: 7px; }
+.dir.long { color: var(--up); background: var(--up-soft); }
+.dir.short { color: var(--down); background: var(--down-soft); }
+.sub { display: block; font: 400 10.5px/1.3 var(--font-mono); color: var(--text-3); margin-top: 2px; white-space: nowrap; }
+.sub.up { color: var(--up); }
+td .pill { font-size: 10.5px; padding: 2px 7px; }
+td .empty { border: 0; }
+
+/* the book */
+.book .rangebar { display: block; width: 100%; min-width: 150px; max-width: 230px; height: 30px; overflow: visible; }
+.rangebar .trk { stroke: var(--line-2); stroke-width: 2; stroke-linecap: round; }
+.rangebar .run { stroke-width: 4; stroke-linecap: round; }
+.rangebar .run.up { stroke: var(--up); }
+.rangebar .run.down { stroke: var(--down); }
+.rangebar .stop { stroke: var(--down); stroke-width: 2; }
+.rangebar .entry { stroke: var(--text-2); stroke-width: 1.5; }
+.rangebar .best { fill: var(--accent); }
+.rangebar .tp { stroke: var(--up); stroke-width: 2; stroke-dasharray: 2 2; }
+.rangebar .mark { fill: var(--text); stroke: var(--panel); stroke-width: 2; }
+.rangebar text { font: 500 9px var(--font-mono); fill: var(--text-3); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 9px 14px 12px; font: 400 11px/1.4 var(--font-mono); color: var(--text-3); border-top: 1px solid var(--line); }
+.legend i { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 5px; background: currentColor; }
+.legend .l-stop { color: var(--down); }
+.legend .l-entry { color: var(--text-2); }
+.legend .l-best { color: var(--accent); }
+.legend .l-tp { color: var(--up); }
+.legend .l-mark { color: var(--text-2); }
+.legend .l-mark i { width: 7px; height: 7px; border-radius: 50%; background: var(--text); }
+.legend .note { flex-basis: 100%; }
+
+/* blotter */
+.tabs { display: inline-flex; padding: 3px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.tabs button {
+  border: 0; background: none; cursor: pointer; padding: 4px 11px; border-radius: 5px;
+  font: 500 12px/1.3 var(--font-mono); color: var(--text-3); letter-spacing: 0.03em;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.tabs button[aria-selected="true"] { color: var(--text); background: var(--raise); box-shadow: inset 0 0 0 1px var(--line-2); }
+.stats { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 4px; }
+.stats:empty { display: none; }
+.rcell { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.rbar { width: 60px; height: 8px; position: relative; flex: none; }
+.rbar::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line-2); }
+.rbar i { position: absolute; top: 0; bottom: 0; border-radius: 1px; }
+.rbar i.up { left: 50%; background: var(--up); }
+.rbar i.down { right: 50%; background: var(--down); }
+
+/* gauges */
+.gauges { display: grid; gap: 14px; }
+.gauge .top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.gauge .name { font-size: 12.5px; color: var(--text-2); }
+.gauge .val { font: 500 12.5px/1.2 var(--font-mono); white-space: nowrap; }
+.gauge .val small { color: var(--text-3); font-weight: 400; font-size: 11.5px; }
+.track { position: relative; height: 6px; border-radius: 3px; background: var(--raise); margin-top: 7px; }
+.track > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--accent); width: 0; transition: width 400ms var(--ease-out); }
+.track[data-level="warn"] > i { background: var(--warn); }
+.track[data-level="over"] > i { background: var(--down); }
+.track > b { position: absolute; top: -4px; bottom: -4px; width: 2px; border-radius: 1px; background: var(--warn); }
+.gauge .note { font: 400 11px/1.4 var(--font-mono); color: var(--text-3); margin-top: 6px; }
+.gauge .note.down { color: var(--down); }
+.pips { display: flex; gap: 4px; margin-top: 7px; }
+.pips i { flex: 1; height: 6px; border-radius: 2px; background: var(--raise); }
+.pips i.on { background: var(--down); }
+.pips i.slot { background: var(--accent); }
+.entries { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; }
+
+/* signals */
+.uni { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.coin { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px 7px; min-width: 0; }
+.coin .c1 { display: flex; align-items: center; gap: 6px; font: 600 12px/1.2 var(--font-mono); }
+.coin .c1 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); flex: none; }
+.coin[data-state="ready"] .dot { background: var(--up); }
+.coin[data-state="warming"] .dot { background: var(--warn); }
+.coin[data-state="off"] { opacity: 0.5; }
+.coin[data-state="off"] .dot { background: var(--down); }
+.coin .c2 { font: 400 10.5px/1.3 var(--font-mono); color: var(--text-3); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fresh { position: relative; height: 2px; background: var(--raise); border-radius: 1px; margin-top: 6px; overflow: hidden; }
+.fresh i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--up); }
+.fresh[data-level="warn"] i { background: var(--up); }
+.fresh[data-level="over"] i { background: var(--down); }
+.decisions { margin-top: 14px; }
+.decisions table { font-size: 12.5px; }
+.decisions th:first-child, .decisions td:first-child { padding-left: 0; }
+.decisions th:last-child, .decisions td:last-child { padding-right: 0; }
+.sect { font: 500 10.5px/1.3 var(--font-mono); color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 8px; }
+
+/* system */
+.sys { list-style: none; margin: 0; padding: 0; }
+.sys li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.sys li:first-child { border-top: 0; padding-top: 0; }
+.led { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); align-self: center; }
+.led.healthy { background: var(--up); box-shadow: 0 0 8px color-mix(in srgb, var(--up) 60%, transparent); }
+.led.degraded, .led.starting { background: var(--warn); }
+.led.failed { background: var(--down); box-shadow: 0 0 8px color-mix(in srgb, var(--down) 60%, transparent); }
+.sys .n { font-size: 13px; }
+.sys .st { font: 500 10.5px/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); }
+.sys .st.degraded, .sys .st.starting { color: var(--warn); }
+.sys .st.failed { color: var(--down); }
+.sys .d { grid-column: 2 / 4; font: 400 11px/1.4 var(--font-mono); color: var(--text-3); overflow-wrap: anywhere; }
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 14px; margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.kv dt { color: var(--text-3); }
+.kv dd { margin: 0; text-align: right; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.breakers { margin-top: 12px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--down) 45%, transparent); background: var(--down-soft); border-radius: var(--r-sm); font-size: 12.5px; }
+.breakers b { color: var(--down); }
 .breakers ul { margin: 4px 0 0; padding-left: 18px; }
 
-/* ---- chart ----------------------------------------------------------- */
-.chart-wrap { position: relative; }
-svg.equity { width: 100%; height: 240px; display: block; overflow: visible; }
-.equity .grid line { stroke: var(--grid); stroke-width: 1; }
-.equity .axis text { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.equity .baseline { stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 4 4; }
-.equity .line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.equity .cross { stroke: var(--ink-2); stroke-width: 1; }
-.equity .dot { fill: var(--series-1); stroke: var(--surface); stroke-width: 2; }
-.tooltip {
-  position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--rule-strong);
-  border-radius: 4px; padding: 6px 9px; font-size: 13px; box-shadow: 0 2px 8px rgb(0 0 0 / 0.12); white-space: nowrap;
+/* kill switch */
+.kill { border-color: color-mix(in srgb, var(--down) 40%, var(--line)); scroll-margin-top: 90px; }
+.kill .ph h2 { color: var(--down); }
+.kill .meta.down { color: var(--down); font-weight: 600; }
+.kill label { display: block; font-size: 12px; color: var(--text-2); margin: 10px 0 4px; }
+.kill input, .kill textarea {
+  width: 100%; background: var(--bg); border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  padding: 7px 9px; font-size: 16px; /* 16px stops phones zooming on focus */
 }
-.tooltip b { display: block; font-size: 15px; }
-.tooltip span { color: var(--ink-2); }
-.empty { color: var(--muted); padding: 28px 0; text-align: center; }
+.kill textarea { min-height: 56px; resize: vertical; }
+@media (min-width: 721px) { .kill input, .kill textarea { font-size: 13.5px; } }
+.btn {
+  width: 100%; margin-top: 12px; padding: 11px 14px; border-radius: var(--r-sm); cursor: pointer;
+  font: 600 14px/1 var(--font-display); letter-spacing: 0.06em; text-transform: uppercase;
+  border: 1px solid transparent; transition: transform 120ms var(--ease-out), filter 120ms ease;
+}
+.btn:active:not(:disabled) { transform: scale(0.98); }
+.btn-halt { background: var(--down); color: #fff; }
+.btn-halt:hover { filter: brightness(1.08); }
+.btn-resume { background: transparent; color: var(--text); border-color: var(--line-2); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
+.result { font: 400 12px/1.4 var(--font-mono); margin-top: 8px; min-height: 1.4em; color: var(--text-2); }
+.result.ok { color: var(--up); }
+.result.err { color: var(--down); }
+details.resume { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+details summary { cursor: pointer; font: 500 12px/1.4 var(--font-mono); color: var(--text-2); letter-spacing: 0.03em; }
 
-/* ---- tables ---------------------------------------------------------- */
-.table-scroll { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { text-align: left; font-weight: 600; color: var(--ink-2); border-bottom: 1px solid var(--rule-strong); padding: 6px 8px; white-space: nowrap; }
-td { border-bottom: 1px solid var(--rule); padding: 6px 8px; vertical-align: top; overflow-wrap: anywhere; }
-td.r, th.r { text-align: right; }
-.pill { display: inline-flex; align-items: center; gap: 5px; font-weight: 500; white-space: nowrap; }
-.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--pill, var(--muted)); }
-.pill[data-tone="good"] { --pill: var(--good); }
-.pill[data-tone="warn"] { --pill: var(--warning); }
-.pill[data-tone="bad"] { --pill: var(--critical); }
-.pill[data-tone="info"] { --pill: var(--series-1); }
-.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
-.three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
-.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-size: 14px; }
-.kv dt { color: var(--ink-2); }
-.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+/* diagnostics */
+.diag { margin-top: 14px; }
+.diag > summary { list-style: none; padding: 12px 14px; display: flex; align-items: center; gap: 10px; }
+.diag > summary::-webkit-details-marker { display: none; }
+.diag > summary h2 { margin: 0; font: 600 15px/1.2 var(--font-display); letter-spacing: 0.03em; text-transform: uppercase; color: var(--text); }
+.diag > summary .chev { transition: transform 200ms var(--ease-out); color: var(--text-3); flex: none; }
+.diag[open] > summary .chev { transform: rotate(90deg); }
+.diag-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border-top: 1px solid var(--line); border-radius: 0 0 var(--r-md) var(--r-md); overflow: hidden; }
+.diag-grid > div { background: var(--panel); padding: 12px 14px; min-width: 0; }
+.diag-grid .kv { margin: 0; padding: 0; border: 0; }
+.diag-grid table { font-size: 12px; }
+.diag-grid th:first-child, .diag-grid td:first-child { padding-left: 0; }
+.diag-grid th:last-child, .diag-grid td:last-child { padding-right: 0; }
+footer { margin-top: 18px; font: 400 11px/1.5 var(--font-mono); color: var(--text-3); text-align: center; }
 
-.theme-toggle { margin-left: auto; font: inherit; font-size: 14px; background: none; border: 1px solid var(--rule-strong); color: var(--ink-2); border-radius: 3px; padding: 3px 10px; cursor: pointer; }
-
-@media (max-width: 1040px) {
-  .layout { grid-template-columns: minmax(0, 1fr); }
-  /* Single column: keep the halt control directly under the status banner. */
-  .main-col { display: contents; }
-  .aspect { order: 1; }
-  .side-stack { order: 2; }
-  .kpis { order: 3; }
-  .main-col > .panel { order: 4; }
-  .layout > .full { order: 5; }
-  .three { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 1180px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .col.side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .diag-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
+  /* two rows: name + halt, then mode + status + clock */
+  .bar .wrap { gap: 8px 8px; padding-block: 8px; }
+  .brand { order: 1; flex: 1; }
+  .halt-jump { order: 2; }
+  .bar .spacer { order: 3; flex-basis: 100%; height: 0; }
+  #mode { order: 4; }
+  .status-pill { order: 5; }
+  .clock { order: 6; margin-left: auto; }
+  #risk-chip, .clock .upt { display: none; }
+  /* blotter: time stacks under the date, side becomes an arrow */
+  .when-d { display: block; font-size: 10.5px; }
+  #tape .dir { font-size: 0; padding: 0; margin-left: 5px; background: none; }
+  #tape .dir.long::after { content: "▲"; font-size: 9px; }
+  #tape .dir.short::after { content: "▼"; font-size: 9px; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .kpi:nth-child(3) { border-left: 0; }
-  .kpi:nth-child(n+3) { border-top: 1px solid var(--rule); }
-  .kpi .value { font-size: 26px; }
-  .two { grid-template-columns: minmax(0, 1fr); }
-  .aspect { grid-template-columns: 1fr; }
-  .lamp { width: 40px; height: 40px; }
+  .kpi.hero, .kpi:nth-child(even):last-child { grid-column: 1 / -1; }
+  .kpi .v { font-size: 18px; }
+  .kpi.hero .v { font-size: 28px; }
+  .col.side { grid-template-columns: minmax(0, 1fr); }
+  .diag-grid { grid-template-columns: minmax(0, 1fr); }
+  svg.chart { height: 200px; }
+  .opt, .rbar { display: none; }
+  th, td { padding-left: 8px; padding-right: 8px; }
+  /* the book turns into one card per position */
+  .book thead { display: none; }
+  .book tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+  .book tbody tr:last-child { border-bottom: 0; }
+  .book td { display: block; padding: 0 !important; border: 0; text-align: left; }
+  .book td.opt { display: none; }
+  .book td.c-sym { grid-column: 1; grid-row: 1; }
+  .book td.c-pnl { grid-column: 2; grid-row: 1; text-align: right; }
+  .book td.c-px { grid-column: 1; grid-row: 2; align-self: center; }
+  .book td.c-px > div { display: flex; gap: 2px 12px; flex-wrap: wrap; font-size: 12px; }
+  .book td.c-r { grid-column: 2; grid-row: 2; text-align: right; }
+  .book td.c-bar { grid-column: 1 / -1; grid-row: 3; }
+  .book td.empty { grid-column: 1 / -1; padding: 22px 8px !important; text-align: center; }
+  .book .rangebar { max-width: none; }
+  .book tbody tr:hover td { background: none; }
 }
-@media (prefers-reduced-motion: reduce) { .meter > i { transition: none; } }
+@media (min-width: 721px) {
+  .book td.c-px { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
 </style>
 </head>
 <body>
-<div class="page">
-  <header class="masthead">
-    <h1>Signal Bot control room</h1>
-    <span class="env" id="env" data-env="unknown">…</span>
-    <div class="meta" id="meta"><span>Connecting to the bot</span></div>
-    <button class="theme-toggle" id="theme" type="button">Switch theme</button>
-  </header>
-
-  <main class="layout">
-   <div class="main-col">
-    <section class="aspect" id="aspect" data-state="unreachable" aria-live="polite">
-      <div class="lamp" aria-hidden="true"></div>
+<header class="bar">
+  <div class="wrap">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 3.5v9M8 1.5v13M13 4.5v7" stroke="#06080b" stroke-width="1.4" stroke-linecap="round"/><rect x="1.5" y="6" width="3" height="4" rx="0.6" fill="#06080b"/><rect x="6.5" y="4" width="3" height="6.5" rx="0.6" fill="#06080b"/><rect x="11.5" y="6.5" width="3" height="3" rx="0.6" fill="#06080b"/></svg>
+      </div>
       <div>
-        <h2 id="aspect-title">Waiting for the first status update</h2>
-        <p id="aspect-detail">This page refreshes every 3 seconds from /api/status.</p>
+        <div class="brand-name" id="bot-name">Signal Bot</div>
+        <div class="brand-sub" id="bot-sub">control room</div>
       </div>
-    </section>
+    </div>
+    <span class="pill acc" id="mode"><span class="dot"></span><span>…</span></span>
+    <span class="pill" id="risk-chip" hidden></span>
+    <span class="spacer"></span>
+    <span class="pill status-pill" id="status" role="status"><span class="dot"></span><span id="status-text">CONNECTING</span></span>
+    <a class="halt-jump" href="#kill" id="halt-jump">Halt</a>
+    <div class="clock" id="clock">waiting for the first update</div>
+  </div>
+</header>
+<div class="ribbon" id="ribbon" hidden aria-live="polite">
+  <div class="wrap"><b id="ribbon-title"></b><span id="ribbon-detail"></span></div>
+</div>
 
+<main class="wrap">
+  <section class="kpis" aria-label="Key figures">
+    <div class="kpi hero"><div class="k" id="k-equity-label">Equity</div><div class="v" id="k-equity">–</div><div class="s" id="k-equity-sub">&nbsp;</div></div>
+    <div class="kpi"><div class="k">Today (UTC)</div><div class="v" id="k-day">–</div><div class="s" id="k-day-sub">&nbsp;</div></div>
+    <div class="kpi"><div class="k">Open P&amp;L</div><div class="v" id="k-open">–</div><div class="s" id="k-open-sub">&nbsp;</div></div>
+    <div class="kpi"><div class="k">Realised P&amp;L</div><div class="v" id="k-real">–</div><div class="s" id="k-real-sub">&nbsp;</div></div>
+    <div class="kpi"><div class="k">Open risk</div><div class="v" id="k-risk">–</div><div class="mini" id="k-risk-bar"><i></i></div><div class="s" id="k-risk-sub">&nbsp;</div></div>
+    <div class="kpi"><div class="k">Drawdown</div><div class="v" id="k-dd">–</div><div class="mini" id="k-dd-bar"><i></i></div><div class="s" id="k-dd-sub">&nbsp;</div></div>
+  </section>
 
-    <section class="kpis" aria-label="Key figures">
-      <div class="kpi">
-        <div class="label" id="equity-label">Virtual equity</div>
-        <div class="value num" id="equity">–</div>
-        <div class="sub" id="equity-sub">&nbsp;</div>
-      </div>
-      <div class="kpi">
-        <div class="label">Open positions</div>
-        <div class="value num" id="positions-count">–</div>
-        <div class="meter" id="positions-meter" role="meter" aria-valuemin="0" aria-label="Open positions against limit"><i></i></div>
-        <div class="sub" id="positions-sub">&nbsp;</div>
-      </div>
-      <div class="kpi">
-        <div class="label">Daily loss used</div>
-        <div class="value num" id="risk-used">–</div>
-        <div class="meter" id="risk-meter" role="meter" aria-valuemin="0" aria-label="Daily loss against limit"><i></i></div>
-        <div class="sub" id="risk-sub">&nbsp;</div>
-      </div>
-      <div class="kpi">
-        <div class="label">Event backlog</div>
-        <div class="value num" id="backlog">–</div>
-        <div class="sub" id="backlog-sub">&nbsp;</div>
-      </div>
-    </section>
-
-    <section class="panel" aria-labelledby="curve-title">
-      <h3 id="curve-title">Mark-to-market equity</h3>
-      <p class="hint" id="curve-hint">Paper account marked to market on each snapshot. The dashed line is starting equity.</p>
-      <div class="chart-wrap" id="chart-wrap">
-        <svg class="equity" id="chart" role="img" aria-label="Equity over time"></svg>
-        <div class="tooltip" id="tip" hidden></div>
-      </div>
-    </section>
-   </div>
-
-    <aside class="side-stack">
-      <section class="panel lever" aria-labelledby="lever-title">
-        <h3 id="lever-title">Halt trading</h3>
-        <p class="hint">Engages the persisted kill switch. Every new order is refused until someone resumes trading here or with the CLI. Open positions keep their stops.</p>
-        <label for="token">Operator token</label>
-        <input id="token" type="password" autocomplete="off" spellcheck="false">
-        <label for="operator">Your name</label>
-        <input id="operator" type="text" autocomplete="off" maxlength="40">
-        <label for="halt-reason">Reason</label>
-        <textarea id="halt-reason" maxlength="500" placeholder="What did you see?"></textarea>
-        <button class="btn btn-halt" id="halt" type="button">Halt trading now</button>
-        <div class="result" id="halt-result" role="status"></div>
-        <details class="resume">
-          <summary>Resume trading</summary>
-          <label for="resume-reason">What was checked before resuming</label>
-          <textarea id="resume-reason" maxlength="500"></textarea>
-          <label for="resume-confirm">Type RESUME to confirm</label>
-          <input id="resume-confirm" type="text" autocomplete="off" spellcheck="false">
-          <button class="btn btn-resume" id="resume" type="button" disabled>Resume trading</button>
-          <div class="result" id="resume-result" role="status"></div>
-        </details>
+  <div class="grid">
+    <div class="col">
+      <section class="panel" aria-labelledby="curve-title">
+        <div class="ph">
+          <h2 id="curve-title">Equity</h2>
+          <span class="meta" id="curve-meta"></span>
+          <span class="right" id="curve-stats"></span>
+        </div>
+        <div class="chart-wrap" id="chart-wrap">
+          <svg class="chart" id="chart" role="img" aria-label="Equity over time"></svg>
+          <div class="tooltip" id="tip" hidden></div>
+        </div>
       </section>
 
-      <section class="panel" aria-labelledby="interlocks-title">
-        <h3 id="interlocks-title">Interlocks</h3>
-        <ul class="interlocks" id="interlocks"><li><span></span><span class="detail">No data yet</span></li></ul>
-        <div id="breakers"></div>
+      <section class="panel" aria-labelledby="book-title">
+        <div class="ph">
+          <h2 id="book-title">Position book</h2>
+          <span class="meta" id="book-meta"></span>
+        </div>
+        <div class="tscroll"><table class="book">
+          <thead><tr>
+            <th>Market</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Mark</th><th class="r">Stop</th>
+            <th>Stop · entry · best</th><th class="r">R now</th><th class="r">Open P&amp;L</th>
+          </tr></thead>
+          <tbody id="book"></tbody>
+        </table></div>
+        <div class="legend">
+          <span class="l-stop" aria-hidden="true"><i></i>stop</span><span class="l-entry" aria-hidden="true"><i></i>entry</span>
+          <span class="l-mark" aria-hidden="true"><i></i>mark</span><span class="l-best" aria-hidden="true"><i></i>best price</span>
+          <span class="l-tp" aria-hidden="true"><i></i>target</span>
+          <span class="note">Mark = last completed 4h close (what the stops and limits are judged on). R = move from entry in units of the initial risk. Bars read left to right as the trade gets better, for longs and shorts alike.</span>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="tape-title">
+        <div class="ph">
+          <h2 id="tape-title">Blotter</h2>
+          <span class="right">
+            <span class="tabs" role="tablist" aria-label="Blotter view">
+              <button type="button" role="tab" id="tab-trades" aria-selected="true" aria-controls="tape">Closed trades</button>
+              <button type="button" role="tab" id="tab-orders" aria-selected="false" aria-controls="tape">Orders</button>
+            </span>
+          </span>
+        </div>
+        <div class="stats" id="tape-stats"></div>
+        <div class="tscroll" id="tape" role="tabpanel" aria-labelledby="tab-trades"></div>
+      </section>
+    </div>
+
+    <aside class="col side">
+      <section class="panel" aria-labelledby="limits-title">
+        <div class="ph"><h2 id="limits-title">Risk limits</h2><span class="meta" id="limits-meta"></span></div>
+        <div class="pb"><div class="gauges" id="gauges"></div></div>
+      </section>
+
+      <section class="panel kill" id="kill" aria-labelledby="kill-title">
+        <div class="ph"><h2 id="kill-title">Halt trading</h2><span class="meta" id="kill-state"></span></div>
+        <div class="pb">
+          <p class="hint">Engages the persisted kill switch. Every new order is refused until someone resumes trading here or with the CLI. Open positions keep their stops.</p>
+          <label for="token">Operator token</label>
+          <input id="token" type="password" autocomplete="off" spellcheck="false">
+          <label for="operator">Your name</label>
+          <input id="operator" type="text" autocomplete="off" maxlength="40">
+          <label for="halt-reason">Reason</label>
+          <textarea id="halt-reason" maxlength="500" placeholder="What did you see?"></textarea>
+          <button class="btn btn-halt" id="halt" type="button">Halt trading now</button>
+          <div class="result" id="halt-result" role="status"></div>
+          <details class="resume">
+            <summary>Resume trading</summary>
+            <label for="resume-reason">What was checked before resuming</label>
+            <textarea id="resume-reason" maxlength="500"></textarea>
+            <label for="resume-confirm">Type RESUME to confirm</label>
+            <input id="resume-confirm" type="text" autocomplete="off" spellcheck="false">
+            <button class="btn btn-resume" id="resume" type="button" disabled>Resume trading</button>
+            <div class="result" id="resume-result" role="status"></div>
+          </details>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="sig-title">
+        <div class="ph"><h2 id="sig-title">Signals</h2><span class="meta" id="sig-meta"></span></div>
+        <div class="pb">
+          <p class="sect">Universe · age of the latest 4h candle</p>
+          <div class="uni" id="universe"></div>
+          <div class="decisions">
+            <p class="sect" id="batch-title">Last decision batch</p>
+            <div class="tscroll"><table>
+              <thead><tr><th>Market</th><th class="r">Strength</th><th class="r">Decision</th></tr></thead>
+              <tbody id="decisions"></tbody>
+            </table></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="sys-title">
+        <div class="ph"><h2 id="sys-title">System</h2><span class="meta" id="sys-meta"></span></div>
+        <div class="pb">
+          <ul class="sys" id="components"><li><span class="led"></span><span class="n dim">No data yet</span></li></ul>
+          <div id="breakers"></div>
+          <dl class="kv" id="sysinfo"></dl>
+        </div>
       </section>
     </aside>
+  </div>
 
-    <div class="full two">
-      <section class="panel" aria-labelledby="positions-title">
-        <h3 id="positions-title">Positions on the venue</h3>
-        <p class="hint">From the exchange stream, so this stays current even if the database is down.</p>
-        <div class="table-scroll"><table>
-          <thead><tr><th>Symbol</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Stop</th><th>Protection</th><th>Updated</th></tr></thead>
-          <tbody id="positions"></tbody>
-        </table></div>
-      </section>
-      <section class="panel" aria-labelledby="account-title">
-        <h3 id="account-title">Account ledger</h3>
-        <dl class="kv" id="account"></dl>
-      </section>
+  <details class="panel diag" id="diag">
+    <summary><svg class="chev" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M3 1.5L6.5 5 3 8.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><h2>Diagnostics</h2><span class="meta mono dim" id="diag-meta"></span></summary>
+    <div class="diag-grid">
+      <div><p class="sect">Account ledger</p><dl class="kv" id="account"></dl></div>
+      <div><p class="sect">Exchange discrepancies</p><div class="tscroll"><table><tbody id="discrepancies"></tbody></table></div></div>
+      <div><p class="sect">Event replay · queue</p><div class="tscroll"><table>
+        <thead><tr><th>Consumer</th><th class="r">Replayed</th><th class="r">Waiting</th></tr></thead><tbody id="replay"></tbody></table></div></div>
+      <div><p class="sect">Operator audit trail</p><div class="tscroll"><table><tbody id="audit"></tbody></table></div></div>
     </div>
-
-    <section class="panel full" aria-labelledby="protection-title">
-      <h3 id="protection-title">Stops and exits</h3>
-      <p class="hint">Trailing stops move once per completed 4h bar, never looser, and are resting orders on the exchange. "Next stop" is where the strategy's rule puts the stop now. "Target" is the fixed take-profit, if the strategy uses one.</p>
-      <div class="table-scroll"><table>
-        <thead><tr><th>Symbol</th><th>Side</th><th>Stop type</th><th class="r">Initial stop</th><th class="r">Stop on exchange</th><th class="r">Next stop</th><th class="r">Target</th><th class="r">Trail</th><th class="r">Best price</th><th>Last moved</th><th>Time stop</th></tr></thead>
-        <tbody id="protection"></tbody>
-      </table></div>
-    </section>
-
-    <div class="full two">
-      <section class="panel" aria-labelledby="portfolio-title">
-        <h3 id="portfolio-title">Portfolio risk</h3>
-        <p class="hint">One account shared by every symbol. New entries are refused when a limit would be crossed.</p>
-        <dl class="kv" id="portfolio"></dl>
-      </section>
-      <section class="panel" aria-labelledby="trend-title">
-        <h3 id="trend-title">Trend signals</h3>
-        <p class="hint" id="trend-hint">Decided on completed 4h candles with the research code.</p>
-        <div class="table-scroll"><table>
-          <thead><tr><th>Symbol</th><th>Side</th><th class="r">Strength</th><th>Decision</th><th class="r">Contracts</th></tr></thead>
-          <tbody id="trend-batch"></tbody>
-        </table></div>
-        <div class="table-scroll"><table>
-          <thead><tr><th>Symbol</th><th>Tradable</th><th class="r">4h bars</th><th>Last bar</th></tr></thead>
-          <tbody id="trend-universe"></tbody>
-        </table></div>
-      </section>
-    </div>
-
-    <section class="panel full" aria-labelledby="orders-title">
-      <h3 id="orders-title">Recent orders</h3>
-      <div class="table-scroll"><table>
-        <thead><tr><th>Order</th><th>Symbol</th><th>Side</th><th>State</th><th class="r">Filled</th><th class="r">Avg price</th><th>Stop check</th><th>Reason</th><th>Updated</th></tr></thead>
-        <tbody id="orders"></tbody>
-      </table></div>
-    </section>
-
-    <div class="full three">
-      <section class="panel" aria-labelledby="disc-title">
-        <h3 id="disc-title">Exchange discrepancies</h3>
-        <p class="hint">Found by the last reconciliation pass.</p>
-        <div class="table-scroll"><table>
-          <thead><tr><th>Kind</th><th>Subject</th></tr></thead>
-          <tbody id="discrepancies"></tbody>
-        </table></div>
-      </section>
-      <section class="panel" aria-labelledby="replay-title">
-        <h3 id="replay-title">Event replay</h3>
-        <p class="hint">Journal events re-delivered to each consumer at startup, and live queue depth.</p>
-        <div class="table-scroll"><table>
-          <thead><tr><th>Consumer</th><th class="r">Replayed</th><th class="r">Delivered</th><th class="r">Waiting</th></tr></thead>
-          <tbody id="replay"></tbody>
-        </table></div>
-      </section>
-      <section class="panel" aria-labelledby="audit-title">
-        <h3 id="audit-title">Operator audit trail</h3>
-        <div class="table-scroll"><table>
-          <thead><tr><th>When</th><th>Who</th><th>Action</th></tr></thead>
-          <tbody id="audit"></tbody>
-        </table></div>
-      </section>
-    </div>
-  </main>
-</div>
+  </details>
+  <footer>Refreshes every 3 seconds from /api/status. Read-only unless you enter the operator token.</footer>
+</main>
 
 <script>
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
   const POLL_MS = 3000;
+  const NS = "http://www.w3.org/2000/svg";
+  const REDUCED = matchMedia("(prefers-reduced-motion: reduce)");
   let last = null;
   let lastOk = null;
   let token = ""; // memory only: never written to storage
+  let tab = "trades";
+  let chartKey = "";
+  let hovering = false;
+  let prevEquity = null;
 
-  // ---------- helpers (all data goes through textContent) ----------
-  const fmtMoney = (v) => v == null || isNaN(v) ? "–" :
-    new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: v >= 100000 ? 0 : 2 }).format(v);
-  const fmtNum = (v, d = 2) => v == null || v === "" || isNaN(Number(v)) ? "–" :
-    Number(v).toLocaleString(undefined, { maximumFractionDigits: d });
+  // ---------- formatting (all data goes through textContent) ----------
+  const n = (v) => (v == null || v === "" ? NaN : Number(v));
+  const fin = (v) => Number.isFinite(v);
+  const usd = (v, d) => new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: d, maximumFractionDigits: d }).format(v);
+  const money = (v) => (fin(v) ? usd(v, Math.abs(v) >= 100000 ? 0 : 2) : "–");
+  const sign = (v) => (v > 0 ? "+" : v < 0 ? "−" : "");
+  const smoney = (v) => (fin(v) ? sign(v) + usd(Math.abs(v), Math.abs(v) >= 100000 ? 0 : 2) : "–");
+  const pct = (v, d = 2) => (fin(v) ? `${v.toFixed(d)}%` : "–");
+  const spct = (v, d = 2) => (fin(v) ? `${sign(v)}${Math.abs(v).toFixed(d)}%` : "–");
+  const sr = (v) => (fin(v) ? `${sign(v)}${Math.abs(v).toFixed(2)}R` : "–");
+  const qty = (v) => (fin(v) ? v.toLocaleString(undefined, { maximumFractionDigits: 4 }) : "–");
   // Prices keep their significant digits: 0.07183 and 2,125.25 both read correctly.
-  const fmtPrice = (v) => v == null || v === "" || isNaN(Number(v)) ? "–" :
-    Number(v).toLocaleString(undefined, { maximumSignificantDigits: 7 });
-  const fmtTime = (iso) => {
+  const price = (v) => (fin(n(v)) ? n(v).toLocaleString(undefined, { maximumSignificantDigits: 6 }) : "–");
+  const tone = (v) => (fin(v) ? (v > 0 ? "up" : v < 0 ? "down" : "") : "");
+  const when = (iso, withSec) => {
     if (!iso) return "–";
     const d = new Date(iso);
-    return isNaN(d) ? String(iso) : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    if (isNaN(d)) return String(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", ...(withSec ? { second: "2-digit" } : {}), hour12: false });
   };
-  function el(tag, text, attrs) {
-    const n = document.createElement(tag);
-    if (text != null) n.textContent = String(text);
-    if (attrs) for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-    return n;
+  const age = (sec) => {
+    if (!fin(sec)) return "–";
+    sec = Math.max(0, sec);
+    if (sec < 90) return `${Math.round(sec)}s`;
+    if (sec < 3600) return `${Math.round(sec / 60)}m`;
+    if (sec < 86400) return `${Math.floor(sec / 3600)}h ${String(Math.floor((sec % 3600) / 60)).padStart(2, "0")}m`;
+    return `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h`;
+  };
+  // Date and time as two spans, so the phone layout can stack them.
+  const stamp = (iso) => {
+    const d = new Date(iso);
+    const wrap = document.createElement("span");
+    if (!iso || isNaN(d)) { wrap.textContent = iso ? String(iso) : "–"; return wrap; }
+    wrap.append(
+      el("span", d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " ", "when-d"),
+      el("span", d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })),
+    );
+    return wrap;
+  };
+  const sentence = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "–");
+  const short = (sym) => String(sym || "").replace(/(USDT|USD|PERP)$/i, "") || String(sym || "");
+
+  function el(tag, text, cls) {
+    const e = document.createElement(tag);
+    if (text != null) e.textContent = String(text);
+    if (cls) e.className = cls;
+    return e;
   }
-  function row(cells) {
+  function svg(tag, attrs, parent) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function td(content, cls) {
+    const c = document.createElement("td");
+    if (content instanceof Node) c.appendChild(content);
+    else c.textContent = content == null ? "–" : String(content);
+    if (cls) c.className = cls;
+    return c;
+  }
+  function pill(text, cls) {
+    const p = el("span", null, "pill " + (cls || ""));
+    p.append(el("span", null, "dot"), el("span", text));
+    return p;
+  }
+  function sideTag(side) {
+    const long = side === "buy" || side === "long";
+    return el("span", long ? "LONG" : "SHORT", "dir " + (long ? "long" : "short"));
+  }
+  function symCell(symbol, side, small, smallCls) {
+    const s = el("div", null, "sym");
+    s.append(document.createTextNode(short(symbol)), sideTag(side));
+    if (small) s.appendChild(el("small", small, smallCls));
+    s.title = symbol;
+    return s;
+  }
+  function emptyRow(tbody, text, cols) {
     const tr = document.createElement("tr");
-    for (const c of cells) {
-      const td = document.createElement("td");
-      if (c instanceof Node) td.appendChild(c); else if (c && typeof c === "object") {
-        td.textContent = c.text; if (c.cls) td.className = c.cls;
-      } else td.textContent = c == null ? "–" : String(c);
-      tr.appendChild(td);
-    }
-    return tr;
+    const c = td(text, "empty");
+    c.colSpan = cols;
+    tr.appendChild(c);
+    tbody.replaceChildren(tr);
   }
-  function fill(tbody, rows, emptyText, cols) {
-    tbody.replaceChildren();
-    if (!rows.length) {
-      const tr = document.createElement("tr");
-      const td = el("td", emptyText, { colspan: String(cols) });
-      td.className = "empty";
-      tr.appendChild(td); tbody.appendChild(tr); return;
-    }
-    rows.forEach((r) => tbody.appendChild(r));
+  function setLevel(node, used, limit) {
+    const frac = limit > 0 && fin(used) ? used / limit : 0;
+    node.dataset.level = frac > 1 ? "over" : frac >= 0.8 ? "warn" : "ok";
+    node.querySelector("i").style.width = `${Math.max(0, Math.min(1, frac)) * 100}%`;
+    return frac;
   }
-  function pill(text, tone) { return el("span", text, { class: "pill", "data-tone": tone }); }
-  const ORDER_TONE = {
-    filled: "info", closed: "good", acknowledged: "info", partially_filled: "info", submitting: "warn",
-    cancel_pending: "warn", submission_unknown: "bad", reconcile_required: "bad", rejected: "bad",
-    cancelled: "", expired: "", pending: ""
-  };
-  const ORDER_LABEL = {
-    submission_unknown: "Outcome unknown", reconcile_required: "Needs reconciling", partially_filled: "Partially filled",
-    cancel_pending: "Cancelling"
-  };
-  const sentence = (s) => s ? (ORDER_LABEL[s] || (s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " "))) : "–";
+  function flash(node, from, to) {
+    if (from == null || !fin(from) || !fin(to) || from === to || REDUCED.matches) return;
+    node.classList.remove("flash-up", "flash-down");
+    void node.offsetWidth; // restart the animation
+    node.classList.add(to > from ? "flash-up" : "flash-down");
+  }
 
-  const ICONS = {
-    healthy: '<svg class="status-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8" fill="var(--good)"/><path d="M5 9.3l2.6 2.5L13 6.4" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    degraded: '<svg class="status-icon" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 1.5l8 14.5H1z" fill="var(--warning)"/><path d="M9 6.5v4.2M9 13.2v.1" stroke="#0b0b0b" stroke-width="2" stroke-linecap="round"/></svg>',
-    starting: '<svg class="status-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="3 3"/></svg>',
-    failed: '<svg class="status-icon" viewBox="0 0 18 18" aria-hidden="true"><rect x="1" y="1" width="16" height="16" rx="3" fill="var(--critical)"/><path d="M6 6l6 6M12 6l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>'
-  };
-  const STATUS_WORD = { healthy: "Healthy", degraded: "Degraded", starting: "Starting", failed: "Failed" };
+  // ---------- derived state ----------
+  // One accent per bot, so the four tabs are easy to tell apart at a glance. Green, red and
+  // amber are kept for profit, loss and warnings. Unlabelled (main) bot = blue; the current
+  // labels land on distinct entries: "TP 1.5R" violet, "TP 1.5R + pause" cyan, Binance pink.
+  const MAIN_ACCENT = "#5b9dff";
+  const ACCENTS = ["#3fc1c9", "#e879b9", "#7cc7ff", "#c9a0ff", "#b48df0"];
+  function botIdentity(e) {
+    const label = String(e.bot_label || "").trim();
+    let mode;
+    if (e.exec_mode === "paper") mode = { text: "PAPER", cls: "acc" };
+    else if (e.binance_trade_mode === "demo") mode = { text: "BINANCE DEMO", cls: "warn" };
+    else if (e.exec_mode === "live") mode = { text: `LIVE · ${String(e.venue || "").toUpperCase()}`, cls: "down solid" };
+    else mode = { text: String(e.exec_mode || "unknown").toUpperCase(), cls: "" };
+    let h = 0;
+    for (const ch of label) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return { label: label || "Main bot", mode, accent: label ? ACCENTS[h % ACCENTS.length] : MAIN_ACCENT };
+  }
+  const portfolioOf = (s) => s.portfolio || (s.trend && s.trend.portfolio) || null;
 
-  // ---------- render ----------
+  function bookRows(s) {
+    const prot = Array.isArray(s.protection) ? s.protection : null;
+    const venue = new Map((s.positions || []).map((p) => [p.symbol, p]));
+    let rows;
+    if (!prot) {
+      // Database down: fall back to what the exchange stream says.
+      rows = (s.positions || []).map((p) => ({
+        symbol: p.symbol, long: n(p.size) > 0, size: Math.abs(n(p.size)), entry: n(p.entry_price), mark: NaN,
+        stop: n(p.stop_loss_price), initStop: NaN, best: NaN, tp: n(p.take_profit_price), cv: 1,
+        venueStop: p.has_stop_loss, mode: p.trail_amount ? "trailing (venue)" : "fixed", next: NaN,
+      }));
+    } else {
+      rows = prot.map((o) => {
+        const basis = fin(n(o.price_basis)) ? n(o.price_basis) : 0;
+        const v = venue.get(o.symbol);
+        return {
+          symbol: o.symbol, long: o.side === "buy", size: n(o.size), entry: n(o.entry), mark: n(o.mark),
+          stop: fin(n(o.current_stop)) ? n(o.current_stop) : n(o.initial_stop), initStop: n(o.initial_stop),
+          best: fin(n(o.best_reference_price)) ? n(o.best_reference_price) + basis : NaN,
+          tp: n(o.take_profit), cv: fin(n(o.contract_value)) ? n(o.contract_value) : 1,
+          venueStop: v ? v.has_stop_loss : null, mode: o.stop_mode, next: n(o.next_stop),
+          protective: o.protective, timeStop: o.time_stop_at,
+        };
+      });
+    }
+    return rows.map((r) => {
+      const dir = r.long ? 1 : -1;
+      const risk = Math.abs(r.entry - r.initStop);
+      r.r = fin(r.mark) && risk > 0 ? (dir * (r.mark - r.entry)) / risk : NaN;
+      r.lockR = fin(r.stop) && risk > 0 ? (dir * (r.stop - r.entry)) / risk : NaN;
+      r.pnl = fin(r.mark) && fin(r.entry) ? dir * (r.mark - r.entry) * r.size * r.cv : NaN;
+      return r;
+    });
+  }
+
+  // ---------- header + ribbon ----------
   function renderHeader(s) {
-    const env = (s.environment && s.environment.exec_mode) || "unknown";
-    const envEl = $("env");
-    envEl.textContent = env === "live" ? "Live trading" : env === "paper" ? "Paper" : env === "simulation" ? "Simulation" : env;
-    envEl.dataset.env = env;
-    const meta = $("meta");
-    meta.replaceChildren();
     const e = s.environment || {};
-    const commit = e.commit ? String(e.commit).slice(0, 10) + (e.dirty ? " (modified)" : "") : null;
-    [
-      e.venue && `Venue ${e.venue}${e.delta_mode ? " " + e.delta_mode : ""}`,
-      e.strategy && `Strategy ${e.strategy.name} v${e.strategy.version}`,
-      commit && `Commit ${commit}`,
-      e.not_on_delta && e.not_on_delta.length && `Not tradable on this venue: ${e.not_on_delta.map((m) => String(m).split(" ")[0]).join(", ")}`,
-      s.uptime_seconds != null && `Up ${Math.floor(s.uptime_seconds / 3600)}h ${Math.floor((s.uptime_seconds % 3600) / 60)}m`,
-    ].filter(Boolean).forEach((t) => meta.appendChild(el("span", t)));
-    meta.appendChild(el("span", "Updated " + new Date().toLocaleTimeString(), { id: "updated" }));
+    const id = botIdentity(e);
+    document.documentElement.style.setProperty("--accent", id.accent);
+    $("bot-name").textContent = id.label;
+    const strat = e.strategy || {};
+    $("bot-sub").textContent = [strat.name, strat.version && `v${strat.version}`].filter(Boolean).join(" ") || "control room";
+    const mode = $("mode");
+    mode.className = "pill " + id.mode.cls;
+    mode.lastElementChild.textContent = id.mode.text;
+    const lim = (portfolioOf(s) || {}).limits || {};
+    const chip = $("risk-chip");
+    chip.hidden = !fin(lim.risk_per_trade);
+    if (!chip.hidden) chip.textContent = `RISK ${+(lim.risk_per_trade * 100).toFixed(2)}% / TRADE`;
+    const up = s.uptime_seconds;
+    const upd = el("span");
+    upd.id = "updated";
+    upd.append(el("span", "UPD ", "upt"), document.createTextNode(new Date().toLocaleTimeString(undefined, { hour12: false })));
+    $("clock").replaceChildren(upd, el("span", fin(up) ? ` · UP ${age(up)}` : "", "upt"));
   }
 
-  function renderAspect(s) {
-    const a = $("aspect");
+  function statusView(s) {
     const risk = s.risk || {};
+    const port = portfolioOf(s) || {};
     const breakers = Object.entries(risk.circuit_breakers || {});
-    let title, detail;
-    if (risk.kill_switch_active) {
-      title = "Stopped: kill switch engaged";
-      detail = `${risk.kill_switch_reason || "No reason recorded"}. New orders are refused until an operator resumes trading.`;
-    } else if (breakers.length) {
-      title = "Paused: an interlock is open";
-      detail = breakers.map(([k, v]) => `${k} (${v})`).join("; ") + ". Trading resumes on its own once the condition clears.";
-    } else if (risk.blocking_reason) {
-      title = "Paused: a risk limit is reached";
-      detail = `${risk.blocking_reason}. New signals are refused until the limit clears (daily limits reset at 00:00 UTC).`;
-    } else if (s.overall === "failed") {
-      title = "Not safe to trade";
-      detail = (s.components || []).filter((c) => c.status === "failed").map((c) => `${c.name}: ${c.detail}`).join("; ");
-    } else if (s.overall === "degraded") {
-      title = "Trading allowed, with warnings";
-      detail = (s.components || []).filter((c) => c.status !== "healthy").map((c) => `${c.name}: ${c.detail}`).join("; ");
-    } else {
-      title = "Clear to trade";
-      detail = "Risk governor is enforcing limits and every interlock is closed.";
+    const comps = s.components || [];
+    const list = (pred) => comps.filter(pred).map((c) => `${c.name}: ${c.detail}`).join("; ");
+    if (risk.kill_switch_active) return { pill: "HALTED", cls: "down solid", tone: "down", title: "Stopped: kill switch engaged", detail: `${risk.kill_switch_reason || "No reason recorded"}. New orders are refused until an operator resumes trading.` };
+    if (breakers.length) return { pill: "PAUSED", cls: "down solid", tone: "down", title: "Paused: an interlock is open", detail: breakers.map(([k, v]) => `${k} (${v})`).join("; ") + ". Trading resumes on its own once the condition clears." };
+    if (risk.blocking_reason) return { pill: "LIMIT HIT", cls: "warn solid", tone: "warn", title: "Paused: a risk limit is reached", detail: `${risk.blocking_reason}. New signals are refused until the limit clears (daily limits reset at 00:00 UTC).` };
+    if (s.overall === "failed") return { pill: "NOT SAFE", cls: "down solid", tone: "down", title: "Not safe to trade", detail: list((c) => c.status === "failed") };
+    if (port.loss_pause_until) return { pill: "COOLING OFF", cls: "warn solid", tone: "warn", title: `Losing-streak pause: ${port.loss_streak} losses in a row`, detail: `No new entries until ${when(port.loss_pause_until)}. Open positions keep their stops.` };
+    if (port.entries_allowed === false) return { pill: "ENTRIES OFF", cls: "warn solid", tone: "warn", title: "New entries stopped: drawdown limit", detail: `Drawdown ${pct(port.drawdown_pct)} is past the ${pct(n((port.limits || {}).drawdown_halt) * 100, 0)} halt. Open positions keep their stops.` };
+    if (s.overall === "degraded") return { pill: "WARNINGS", cls: "warn solid", tone: "warn", title: "Trading allowed, with warnings", detail: list((c) => c.status !== "healthy") };
+    return { pill: "CLEAR TO TRADE", cls: "up solid live", tone: null };
+  }
+
+  function renderStatus(v) {
+    $("status").className = "pill status-pill " + v.cls;
+    $("status-text").textContent = v.pill;
+    const r = $("ribbon");
+    r.hidden = !v.tone;
+    if (v.tone) {
+      r.dataset.tone = v.tone;
+      $("ribbon-title").textContent = v.title;
+      $("ribbon-detail").textContent = v.detail || "";
     }
-    a.dataset.state = s.overall || "unreachable";
-    $("aspect-title").textContent = title;
-    $("aspect-detail").textContent = detail;
   }
 
-  function setMeter(id, used, limit) {
-    const m = $(id);
-    const pct = limit > 0 ? Math.max(0, Math.min(1, used / limit)) : 0;
-    m.firstElementChild.style.width = (pct * 100).toFixed(1) + "%";
-    m.dataset.level = pct >= 0.8 ? "critical" : pct >= 0.5 ? "warning" : "ok";
-    m.setAttribute("aria-valuenow", String(used));
-    m.setAttribute("aria-valuemax", String(limit));
-  }
-
-  function renderKpis(s) {
+  // ---------- KPI tape ----------
+  function renderKpis(s, book) {
     const acct = s.account;
+    const port = portfolioOf(s) || {};
+    const lim = port.limits || {};
     const risk = s.risk || {};
-    const limits = risk.limits || {};
+    const trades = Array.isArray(s.trades) ? s.trades : [];
+
+    const eq = acct ? n(acct.equity) : n(port.equity);
+    const eqEl = $("k-equity");
+    eqEl.textContent = money(eq);
+    flash(eqEl, prevEquity, eq);
+    prevEquity = eq;
+    $("k-equity-label").textContent = acct ? "Equity · marked to market" : "Equity";
+    const sub = $("k-equity-sub");
     if (acct) {
-      $("equity-label").textContent = "Virtual equity";
-      $("equity").textContent = fmtMoney(acct.equity);
-      const r = acct.return_pct || 0;
-      const sub = $("equity-sub");
-      sub.textContent = `${r >= 0 ? "+" : ""}${r.toFixed(2)}% since start, ${fmtMoney(acct.fees_paid)} fees`;
-      sub.className = "sub " + (r > 0 ? "up" : r < 0 ? "down" : "");
+      sub.textContent = `${spct(n(acct.return_pct))} since start · ${money(n(acct.initial))}`;
+      sub.className = "s " + tone(n(acct.return_pct));
     } else {
-      $("equity-label").textContent = "Account";
-      $("equity").textContent = "Live venue";
-      $("equity-sub").textContent = "Balance is checked by the risk governor";
+      sub.textContent = fin(n(port.peak_equity)) ? `peak ${money(n(port.peak_equity))}${port.as_of ? ` · as of ${when(port.as_of)}` : ""}` : "balance held at the venue";
+      sub.className = "s";
     }
-    const open = (s.positions || []).length;
-    const maxPos = Number(limits.max_concurrent_positions || 0);
-    $("positions-count").textContent = maxPos ? `${open} of ${maxPos}` : String(open);
-    setMeter("positions-meter", open, maxPos);
-    $("positions-sub").textContent = open >= maxPos && maxPos ? "At the limit: new signals are refused" : "Within limit";
+    document.title = `${botIdentity(s.environment || {}).label} · ${money(eq)} · Signal Bot`;
 
-    const pnlR = Number(risk.daily_pnl_r || 0);
-    const lossLimit = Math.abs(Number(limits.daily_loss_limit_r || 0));
-    const used = pnlR < 0 ? -pnlR : 0;
-    $("risk-used").textContent = lossLimit ? `${used.toFixed(2)}R of ${lossLimit.toFixed(0)}R` : `${used.toFixed(2)}R`;
-    setMeter("risk-meter", used, lossLimit);
-    $("risk-sub").textContent = `Today ${pnlR >= 0 ? "+" : ""}${pnlR.toFixed(2)}R across ${risk.daily_trade_count ?? 0} trades`;
+    const midnight = new Date();
+    midnight.setUTCHours(0, 0, 0, 0);
+    const today = trades.filter((t) => new Date(t.closed_at) >= midnight);
+    const dayPnl = today.reduce((a, t) => a + n(t.net_pnl), 0);
+    const dayR = n(risk.daily_pnl_r);
+    const day = $("k-day");
+    day.textContent = today.length ? smoney(dayPnl) : fin(dayR) ? sr(dayR) : "–";
+    day.className = "v " + tone(today.length ? dayPnl : dayR);
+    const lossLim = Math.abs(n((risk.limits || {}).daily_loss_limit_r));
+    const count = risk.daily_trade_count ?? today.length;
+    $("k-day-sub").textContent = `${fin(dayR) ? sr(dayR) : "–"} · ${count} trade${count === 1 ? "" : "s"}${lossLim ? ` · limit −${lossLim}R` : ""}`;
 
-    const backlog = s.event_backlog ?? 0;
-    $("backlog").textContent = fmtNum(backlog, 0);
-    const bus = s.event_bus || {};
-    $("backlog-sub").textContent = bus.journal_healthy === false
-      ? `Journal down: ${bus.journal_pending} events buffered`
-      : `${fmtNum(bus.published, 0)} published, ${fmtNum(bus.duplicates_suppressed, 0)} duplicates dropped`;
+    const marked = book.filter((r) => fin(r.pnl));
+    const openPnl = acct ? n(acct.unrealized) : marked.length ? marked.reduce((a, r) => a + r.pnl, 0) : NaN;
+    const open = $("k-open");
+    open.textContent = book.length || acct ? smoney(openPnl) : "–";
+    open.className = "v " + tone(openPnl);
+    const withR = book.filter((r) => fin(r.r));
+    $("k-open-sub").textContent = `${book.length} open${withR.length ? ` · ${sr(withR.reduce((a, r) => a + r.r, 0))}` : ""}${acct ? " · live books" : marked.length ? " · at 4h close" : ""}`;
+
+    const realised = acct ? n(acct.realized_pnl) : trades.length ? trades.reduce((a, t) => a + n(t.net_pnl), 0) : NaN;
+    const real = $("k-real");
+    real.textContent = smoney(realised);
+    real.className = "v " + tone(realised);
+    $("k-real-sub").textContent = acct ? `fees ${money(n(acct.fees_paid))} · funding ${smoney(n(acct.funding))}`
+      : trades.length ? `net of fees · last ${trades.length} trades` : "no closed trades yet";
+
+    const orisk = n(port.open_risk_pct);
+    const orLim = n(lim.max_open_risk) * 100;
+    $("k-risk").textContent = pct(orisk);
+    setLevel($("k-risk-bar"), orisk, orLim);
+    $("k-risk-sub").textContent = fin(orLim) ? `of ${pct(orLim, 1)} entry limit` : "portfolio not running";
+
+    const dd = n(port.drawdown_pct);
+    const halt = n(lim.drawdown_halt) * 100;
+    const reduce = n(lim.drawdown_reduce) * 100;
+    const ddEl = $("k-dd");
+    ddEl.textContent = fin(dd) ? (dd > 0 ? `−${dd.toFixed(2)}%` : "0.00%") : "–";
+    ddEl.className = "v " + (dd > 0 ? "down" : "");
+    const bar = $("k-dd-bar");
+    setLevel(bar, dd, halt);
+    bar.querySelectorAll("b").forEach((b) => b.remove());
+    if (fin(reduce) && halt > 0) {
+      const tick = el("b");
+      tick.style.left = `${(reduce / halt) * 100}%`;
+      bar.appendChild(tick);
+    }
+    $("k-dd-sub").textContent = fin(halt) ? `half size ${pct(reduce, 0)} · stop ${pct(halt, 0)}` : "–";
   }
 
-  function renderInterlocks(s) {
-    const ul = $("interlocks");
-    ul.replaceChildren();
-    for (const c of s.components || []) {
-      const li = document.createElement("li");
-      const icon = document.createElement("span");
-      icon.innerHTML = ICONS[c.status] || ICONS.starting; // static, trusted markup only
-      const name = el("span", `${c.name}: ${STATUS_WORD[c.status] || c.status}`, { class: "name" });
-      const detail = el("span", c.detail, { class: "detail" });
-      li.append(icon, name, detail);
-      ul.appendChild(li);
+  // ---------- equity chart ----------
+  function curveData(s) {
+    const pts = (s.equity_curve || []).map((p) => ({ t: new Date(p.ts).getTime(), v: n(p.equity) })).filter((p) => fin(p.t) && fin(p.v));
+    if (pts.length >= 2) return { pts, base: s.account ? n(s.account.initial) : NaN, kind: "equity" };
+    const trades = (Array.isArray(s.trades) ? s.trades : []).slice().reverse();
+    if (trades.length) {
+      let cum = 0;
+      const out = [{ t: new Date(trades[0].closed_at).getTime() - 3600e3, v: 0 }];
+      for (const t of trades) { cum += n(t.net_pnl); out.push({ t: new Date(t.closed_at).getTime(), v: cum }); }
+      return { pts: out.filter((p) => fin(p.t) && fin(p.v)), base: 0, kind: "pnl" };
     }
-    const b = $("breakers");
-    b.replaceChildren();
-    const risk = s.risk || {};
-    const entries = Object.entries(risk.circuit_breakers || {});
-    if (entries.length || risk.kill_switch_active || risk.error) {
-      const box = el("div", null, { class: "breakers" });
-      if (risk.error) box.appendChild(el("div", risk.error));
-      if (risk.kill_switch_active) box.appendChild(el("b", "Kill switch engaged"));
-      if (entries.length) {
-        box.appendChild(el("b", entries.length === 1 ? " One circuit breaker open" : ` ${entries.length} circuit breakers open`));
-        const list = document.createElement("ul");
-        entries.forEach(([k, v]) => list.appendChild(el("li", `${k}: ${v}`)));
-        box.appendChild(list);
-      }
-      b.appendChild(box);
-    }
+    return { pts, base: NaN, kind: "equity" };
   }
 
-  function renderChart(points, initial) {
-    const svg = $("chart");
+  function renderChart(s, force) {
     const wrap = $("chart-wrap");
-    svg.replaceChildren();
-    const data = (points || []).map((p) => ({ t: new Date(p.ts), v: Number(p.equity) })).filter((p) => !isNaN(p.t) && !isNaN(p.v));
-    if (data.length < 2) {
-      const fo = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      fo.setAttribute("x", "50%"); fo.setAttribute("y", "50%"); fo.setAttribute("text-anchor", "middle");
-      fo.setAttribute("fill", "var(--muted)");
-      fo.textContent = data.length ? "One sample so far. The curve appears after the next snapshot." : "No equity samples yet. The paper broker records one every minute.";
-      svg.appendChild(fo);
+    const W = Math.max(280, wrap.clientWidth - 18);
+    const { pts, base, kind } = curveData(s);
+    const tail = pts.length ? `${pts[pts.length - 1].t}:${pts[pts.length - 1].v}` : "";
+    const key = `${W}|${kind}|${pts.length}|${tail}`;
+    if (!force && (key === chartKey || hovering)) return;
+    chartKey = key;
+    const root = $("chart");
+    root.replaceChildren();
+    $("curve-title").textContent = kind === "pnl" ? "Closed-trade P&L" : "Equity";
+    $("curve-meta").textContent = kind === "pnl" ? "cumulative net P&L of the closed trades below" : "marked to market every minute · dashed line = starting equity";
+    const stats = $("curve-stats");
+    stats.replaceChildren();
+    if (pts.length < 2) {
+      const H0 = 110;
+      root.setAttribute("viewBox", `0 0 ${W} ${H0}`);
+      root.style.height = H0 + "px";
+      svg("text", { class: "note", x: W / 2, y: H0 / 2, "text-anchor": "middle" }, root).textContent =
+        pts.length ? "One sample so far. The curve appears after the next snapshot." : "No equity history yet. It fills in as the bot runs and trades close.";
       return;
     }
-    const W = wrap.clientWidth || 800, H = 240, L = 64, R = 12, T = 10, B = 26;
-    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-    const vals = data.map((d) => d.v).concat(initial != null ? [initial] : []);
+    root.style.height = "";
+    const H = root.clientHeight || 250;
+    const L = 2, R = 76, T = 16, B = 22;
+    root.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const vals = pts.map((p) => p.v).concat(fin(base) ? [base] : []);
     let lo = Math.min(...vals), hi = Math.max(...vals);
-    if (hi - lo < 1) { hi += 0.5; lo -= 0.5; }
-    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
-    const t0 = data[0].t.getTime(), t1 = data[data.length - 1].t.getTime();
+    if (hi - lo < 1e-9) { hi += 1; lo -= 1; }
+    const pad = (hi - lo) * 0.12;
+    lo -= pad; hi += pad;
+    const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
     const x = (t) => L + ((t - t0) / Math.max(1, t1 - t0)) * (W - L - R);
     const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-    const NS = "http://www.w3.org/2000/svg";
-    const mk = (tag, attrs, parent) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); (parent || svg).appendChild(n); return n; };
+    const fmtV = kind === "pnl" ? smoney : money;
+    const axisV = (v) => fmtV(v).replace(/\.\d+$/, "");
 
-    const grid = mk("g", { class: "grid" });
-    const axis = mk("g", { class: "axis" });
-    const ticks = 4;
-    for (let i = 0; i <= ticks; i++) {
-      const v = lo + ((hi - lo) * i) / ticks;
-      const yy = y(v);
-      mk("line", { x1: L, x2: W - R, y1: yy, y2: yy }, grid);
-      const t = mk("text", { x: L - 8, y: yy + 4, "text-anchor": "end" }, axis);
-      t.textContent = fmtMoney(v).replace(/\.\d+$/, "");
+    const defs = svg("defs", {}, root);
+    const grad = svg("linearGradient", { id: "eq-fill", x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+    svg("stop", { offset: "0%", "stop-color": "var(--accent)", "stop-opacity": "0.26" }, grad);
+    svg("stop", { offset: "100%", "stop-color": "var(--accent)", "stop-opacity": "0" }, grad);
+
+    const grid = svg("g", { class: "grid" }, root);
+    const axis = svg("g", { class: "axis" }, root);
+    for (let i = 0; i <= 4; i++) {
+      const v = lo + ((hi - lo) * i) / 4;
+      svg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }, grid);
+      svg("text", { x: W - R + 8, y: y(v) + 3.5 }, axis).textContent = axisV(v);
     }
-    const xt = Math.max(2, Math.min(5, data.length, Math.floor((W - L - R) / 110)));
+    const span = t1 - t0;
+    const xt = Math.max(2, Math.min(6, Math.floor((W - L - R) / 120)));
     for (let i = 0; i < xt; i++) {
-      const tt = t0 + ((t1 - t0) * i) / Math.max(1, xt - 1);
-      const t = mk("text", { x: x(tt), y: H - 6, "text-anchor": i === 0 ? "start" : i === xt - 1 ? "end" : "middle" }, axis);
-      const span = t1 - t0;
-      const opts = span > 2 * 86400e3 ? { month: "short", day: "numeric" }
-        : span > 20 * 60e3 ? { hour: "2-digit", minute: "2-digit" }
-        : { hour: "2-digit", minute: "2-digit", second: "2-digit" };
-      t.textContent = span > 2 * 86400e3 ? new Date(tt).toLocaleDateString(undefined, opts) : new Date(tt).toLocaleTimeString(undefined, opts);
+      const tt = t0 + (span * i) / (xt - 1);
+      const lbl = span > 2 * 86400e3 ? new Date(tt).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+        : new Date(tt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+      svg("text", { x: x(tt), y: H - 5, "text-anchor": i === 0 ? "start" : i === xt - 1 ? "end" : "middle" }, axis).textContent = lbl;
     }
-    if (initial != null) mk("line", { class: "baseline", x1: L, x2: W - R, y1: y(initial), y2: y(initial) });
-    mk("path", { class: "line", d: data.map((d, i) => `${i ? "L" : "M"}${x(d.t.getTime()).toFixed(1)},${y(d.v).toFixed(1)}`).join("") });
-    const cross = mk("line", { class: "cross", y1: T, y2: H - B, visibility: "hidden" });
-    const dot = mk("circle", { class: "dot", r: 5, visibility: "hidden" });
-    const hit = mk("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent", tabindex: "0", "aria-label": "Equity samples; use arrow keys" });
+    if (fin(base)) svg("line", { class: "base", x1: L, x2: W - R, y1: y(base), y2: y(base) }, root);
+
+    const path = pts.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join("");
+    svg("path", { d: `${path}L${x(t1).toFixed(1)},${H - B}L${x(t0).toFixed(1)},${H - B}Z`, fill: "url(#eq-fill)" }, root);
+    svg("path", { class: "line", d: path }, root);
+
+    // session high / low
+    let hiI = 0, loI = 0;
+    pts.forEach((p, i) => { if (p.v > pts[hiI].v) hiI = i; if (p.v < pts[loI].v) loI = i; });
+    const hl = svg("g", { class: "hl" }, root);
+    const label = (i, above) => {
+      const px = x(pts[i].t), py = y(pts[i].v);
+      const anchor = px < 70 ? "start" : px > W - R - 70 ? "end" : "middle";
+      svg("text", { x: px, y: above ? py - 7 : py + 14, "text-anchor": anchor }, hl).textContent = `${above ? "H" : "L"} ${fmtV(pts[i].v)}`;
+    };
+    if (hiI !== pts.length - 1) label(hiI, true);
+    if (loI !== pts.length - 1 && loI !== hiI) label(loI, false);
+
+    // last value, tagged on the price axis like a terminal chart
+    const lastV = pts[pts.length - 1].v;
+    const tag = svg("g", { class: "tag" }, root);
+    const ty = Math.max(T, Math.min(H - B, y(lastV)));
+    svg("rect", { x: W - R + 2, y: ty - 9, width: R - 2, height: 18, rx: 3 }, tag);
+    svg("text", { x: W - R + 7, y: ty + 3.5 }, tag).textContent = axisV(lastV);
+    svg("circle", { cx: x(t1), cy: y(lastV), r: 3, fill: "var(--accent)" }, root);
+
+    const chg = lastV - (fin(base) ? base : pts[0].v);
+    const stat = (k, v, cls) => { const st = el("span", k, "stat"); st.appendChild(el("b", v, cls)); stats.appendChild(st); };
+    stat("H", fmtV(pts[hiI].v));
+    stat("L", fmtV(pts[loI].v));
+    stat(kind === "pnl" ? "Net" : "Since start", smoney(chg), tone(chg));
+
+    const cross = svg("line", { class: "cross", y1: T, y2: H - B, visibility: "hidden" }, root);
+    const dot = svg("circle", { class: "dot", r: 4.5, visibility: "hidden" }, root);
+    const hit = svg("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent", tabindex: "0", "aria-label": "Equity samples; use the arrow keys" }, root);
     const tip = $("tip");
-    let idx = data.length - 1;
+    let idx = pts.length - 1;
     function show(i) {
-      idx = Math.max(0, Math.min(data.length - 1, i));
-      const d = data[idx], px = x(d.t.getTime()), py = y(d.v);
+      idx = Math.max(0, Math.min(pts.length - 1, i));
+      const p = pts[idx], px = x(p.t), py = y(p.v);
       cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("visibility", "visible");
       dot.setAttribute("cx", px); dot.setAttribute("cy", py); dot.setAttribute("visibility", "visible");
-      tip.replaceChildren(el("b", fmtMoney(d.v)), el("span", fmtTime(d.t.toISOString())));
+      tip.replaceChildren(el("b", fmtV(p.v)), el("span", when(new Date(p.t).toISOString(), true)));
       tip.hidden = false;
-      const scale = (wrap.clientWidth || W) / W;
-      const left = px * scale + 12;
-      tip.style.left = Math.min(left, (wrap.clientWidth || W) - tip.offsetWidth - 4) + "px";
-      tip.style.top = Math.max(0, py * scale - 46) + "px";
+      const scale = root.getBoundingClientRect().width / W;
+      tip.style.left = Math.max(4, Math.min(14 + px * scale + 12, wrap.clientWidth - tip.offsetWidth - 6)) + "px";
+      tip.style.top = Math.max(0, py * scale - 52) + "px";
     }
-    function hide() { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; }
+    function hide() { hovering = false; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; }
     hit.addEventListener("pointermove", (ev) => {
-      const r = svg.getBoundingClientRect();
+      hovering = true;
+      const r = root.getBoundingClientRect();
       const px = ((ev.clientX - r.left) / r.width) * W;
       let best = 0, bd = Infinity;
-      data.forEach((d, i) => { const dd = Math.abs(x(d.t.getTime()) - px); if (dd < bd) { bd = dd; best = i; } });
+      pts.forEach((p, i) => { const d = Math.abs(x(p.t) - px); if (d < bd) { bd = d; best = i; } });
       show(best);
     });
     hit.addEventListener("pointerleave", hide);
-    hit.addEventListener("focus", () => show(idx));
+    hit.addEventListener("focus", () => { hovering = true; show(idx); });
     hit.addEventListener("blur", hide);
     hit.addEventListener("keydown", (ev) => {
       if (ev.key === "ArrowLeft") { show(idx - 1); ev.preventDefault(); }
       if (ev.key === "ArrowRight") { show(idx + 1); ev.preventDefault(); }
     });
-    svg.setAttribute("aria-label", `Equity from ${fmtMoney(data[0].v)} to ${fmtMoney(data[data.length - 1].v)}`);
+    root.setAttribute("aria-label", `${kind === "pnl" ? "Closed-trade P&L" : "Equity"} from ${fmtV(pts[0].v)} to ${fmtV(lastV)}`);
   }
 
-  function renderTables(s) {
-    fill($("positions"), (s.positions || []).map((p) => row([
-      p.symbol,
-      { text: fmtNum(p.size, 4), cls: "r num" },
-      { text: fmtPrice(p.entry_price), cls: "r num" },
-      { text: p.stop_loss_price ? fmtPrice(p.stop_loss_price) : "–", cls: "r num" },
-      !p.has_stop_loss ? pill("No stop", "bad") : p.trail_amount ? pill("Venue trailing stop", "good") : pill("Stop on venue", "good"),
-      fmtTime(p.updated_at || p.as_of),
-    ])), "No open positions.", 6);
+  // ---------- position book ----------
+  function rangeBar(r) {
+    const W = 200, H = 30, P = 7, MID = 13;
+    const s = svg("svg", { class: "rangebar", viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img" });
+    const levels = [r.stop, r.entry, r.mark, r.best, r.tp, r.initStop].filter(fin);
+    if (levels.length < 2) return s;
+    let lo = Math.min(...levels), hi = Math.max(...levels);
+    if (hi - lo < 1e-12) { hi += 1; lo -= 1; }
+    // Longs read left to right as price rises; shorts are mirrored so "better" is always to the right.
+    const x = (v) => P + (r.long ? (v - lo) / (hi - lo) : (hi - v) / (hi - lo)) * (W - 2 * P);
+    svg("line", { class: "trk", x1: P, x2: W - P, y1: MID, y2: MID }, s);
+    if (fin(r.mark) && fin(r.entry)) svg("line", { class: "run " + (r.r >= 0 ? "up" : "down"), x1: x(r.entry), x2: x(r.mark), y1: MID, y2: MID }, s);
+    if (fin(r.tp)) svg("line", { class: "tp", x1: x(r.tp), x2: x(r.tp), y1: MID - 7, y2: MID + 7 }, s);
+    if (fin(r.stop)) {
+      svg("line", { class: "stop", x1: x(r.stop), x2: x(r.stop), y1: MID - 7, y2: MID + 7 }, s);
+      svg("text", { x: x(r.stop), y: H - 1, "text-anchor": "middle" }, s).textContent = "S";
+    }
+    if (fin(r.entry)) {
+      svg("line", { class: "entry", x1: x(r.entry), x2: x(r.entry), y1: MID - 5, y2: MID + 5 }, s);
+      svg("text", { x: x(r.entry), y: H - 1, "text-anchor": "middle" }, s).textContent = "E";
+    }
+    if (fin(r.best)) {
+      const bx = x(r.best);
+      svg("path", { class: "best", d: `M${bx - 4},${MID - 11}L${bx + 4},${MID - 11}L${bx},${MID - 5}Z` }, s);
+    }
+    if (fin(r.mark)) svg("circle", { class: "mark", cx: x(r.mark), cy: MID, r: 4.5 }, s);
+    const desc = `Stop ${price(r.stop)}, entry ${price(r.entry)}, mark ${price(r.mark)}${fin(r.best) ? `, best ${price(r.best)}` : ""}${fin(r.tp) ? `, target ${price(r.tp)}` : ""}`;
+    svg("title", {}, s).textContent = desc;
+    s.setAttribute("aria-label", desc);
+    return s;
+  }
 
-    const prot = Array.isArray(s.protection) ? s.protection : [];
-    fill($("protection"), prot.map((o) => {
-      const behind = o.next_stop && o.current_stop && Number(o.next_stop) !== Number(o.current_stop);
-      return row([
-        o.symbol, o.side === "buy" ? "Long" : "Short",
-        o.stop_mode === "fixed" ? sentence("fixed") : pill(sentence(o.stop_mode), "info"),
-        { text: fmtPrice(o.initial_stop), cls: "r num" },
-        { text: fmtPrice(o.current_stop), cls: "r num" },
-        behind ? pill(fmtPrice(o.next_stop) + " (pending)", "warn") : { text: o.next_stop ? fmtPrice(o.next_stop) : "–", cls: "r num" },
-        { text: o.take_profit ? fmtPrice(o.take_profit) : "–", cls: "r num" },
-        { text: o.trail_distance && Number(o.trail_distance) ? fmtPrice(o.trail_distance) : "–", cls: "r num" },
-        { text: o.best_reference_price ? fmtPrice(o.best_reference_price) : "–", cls: "r num" },
-        fmtTime(o.stop_updated_at), fmtTime(o.time_stop_at),
-      ]);
-    }), Array.isArray(s.protection) ? "No open positions." : `Unavailable: ${s.protection && s.protection.error}`, 11);
+  function renderBook(s, book) {
+    const tbody = $("book");
+    const prot = s.protection;
+    $("book-meta").textContent = book.length ? `${book.length} open · ${book.filter((r) => r.long).length} long / ${book.filter((r) => !r.long).length} short` : "";
+    if (!book.length) {
+      emptyRow(tbody, Array.isArray(prot) || !prot ? "Flat. No open positions." : `Book unavailable: ${prot.error}`, 8);
+      return;
+    }
+    tbody.replaceChildren(...book.map((r) => {
+      const tr = document.createElement("tr");
+      const bits = [/trailing/.test(r.mode || "") ? "trailing stop" : "fixed stop"];
+      if (fin(r.next) && fin(r.stop) && r.next !== r.stop) bits.push(`next ${price(r.next)}`);
+      if (r.timeStop) bits.push(`time stop ${when(r.timeStop)}`);
+      let warnCls;
+      if (r.venueStop === false) { bits.unshift("NO STOP ON VENUE"); warnCls = "down"; }
+      if (r.protective === "failed") { bits.unshift("STOP PLACEMENT FAILED"); warnCls = "down"; }
 
-    const pf = $("portfolio");
-    pf.replaceChildren();
-    const port = s.portfolio;
-    const lim = (port && port.limits) || {};
-    const pct = (v) => v == null ? "–" : `${fmtNum(v, 2)}%`;
-    // Limits gate NEW entries; winners' risk to a trailing stop can grow past them.
-    const over = (v, limit) => `${pct(v)} of ${pct(limit)}` + (v > limit ? " (above the entry limit: new entries refused)" : "");
-    const pairs2 = port ? [
-      ["Equity (marked to market)", fmtMoney(port.equity)],
-      ["Peak equity", fmtMoney(port.peak_equity)],
-      ["Drawdown", `${pct(port.drawdown_pct)} (risk halves at ${pct(lim.drawdown_reduce * 100)}, entries stop at ${pct(lim.drawdown_halt * 100)})`],
-      ["Open positions", `${port.positions} of ${lim.max_positions}`],
-      ["Open risk to stops", over(port.open_risk_pct, lim.max_open_risk * 100)],
-      ["Correlation-adjusted risk", over(port.correlated_risk_pct, lim.max_correlated_risk * 100)],
-      ["Gross leverage", `${fmtNum(port.gross_leverage, 2)}x of ${fmtNum(lim.max_gross_leverage, 1)}x`],
-      ["Risk per trade", `${pct(lim.risk_per_trade * 100)}${port.risk_scaled ? " (halved: in drawdown)" : ""}`],
-      ...(lim.loss_pause_after ? [["Losing streak", `${port.loss_streak || 0} in a row (pause after ${lim.loss_pause_after}, for ${lim.loss_pause_hours}h)`]] : []),
-      ["New entries", port.loss_pause_until ? `Paused after ${port.loss_streak} losses until ${fmtTime(port.loss_pause_until)}`
-        : port.entries_allowed ? "Allowed" : "Stopped: drawdown limit"],
-    ] : [["Portfolio", "Not running (strategy is not the trend portfolio)"]];
-    for (const [k, v] of pairs2) { pf.appendChild(el("dt", k)); pf.appendChild(el("dd", v)); }
+      const stopWrap = document.createElement("div");
+      stopWrap.append(el("span", price(r.stop)));
+      if (fin(r.lockR)) stopWrap.append(el("span", r.lockR >= 0 ? `locks ${sr(r.lockR)}` : `risks ${sr(r.lockR)}`, "sub " + (r.lockR >= 0 ? "up" : "")));
 
+      const px = document.createElement("div");
+      [["E", r.entry], ["M", r.mark], ["S", r.stop]].forEach(([k, v]) => {
+        const sp = el("span", null, "px");
+        sp.append(el("span", k + " ", "dim"), document.createTextNode(price(v)));
+        px.appendChild(sp);
+      });
+      const pxCell = td(px, "c-px num");
+
+      const rWrap = document.createElement("div");
+      rWrap.append(el("span", sr(r.r), tone(r.r)));
+      if (fin(r.lockR)) rWrap.append(el("span", `stop ${sr(r.lockR)}`, "sub"));
+
+      const pnlWrap = document.createElement("div");
+      pnlWrap.append(el("span", smoney(r.pnl), tone(r.pnl)));
+      if (fin(r.mark) && r.entry) pnlWrap.append(el("span", spct((((r.long ? 1 : -1) * (r.mark - r.entry)) / r.entry) * 100), "sub"));
+
+      tr.append(
+        td(symCell(r.symbol, r.long ? "buy" : "sell", bits.join(" · "), warnCls), "c-sym"),
+        td(qty(r.size * r.cv), "r num opt"),
+        td(price(r.entry), "r num opt"),
+        td(price(r.mark), "r num opt"),
+        td(stopWrap, "r num opt"),
+        pxCell,
+        td(rangeBar(r), "c-bar"),
+        td(rWrap, "r num c-r"),
+        td(pnlWrap, "r num c-pnl"),
+      );
+      return tr;
+    }));
+  }
+
+  // ---------- blotter ----------
+  const EXIT = { sl: "Stop", stop: "Stop", stop_loss: "Stop", tp: "Target", take_profit: "Target", trail: "Trail stop", trailing: "Trail stop", time: "Time stop", time_stop: "Time stop", manual: "Manual", flatten: "Flattened" };
+  const ORDER_TONE = { filled: "acc", closed: "up", acknowledged: "acc", partially_filled: "acc", submitting: "warn", cancel_pending: "warn", submission_unknown: "down", reconcile_required: "down", rejected: "down" };
+
+  function rbar(v) {
+    const b = el("span", null, "rbar");
+    if (fin(v) && v !== 0) {
+      const i = el("i", null, v > 0 ? "up" : "down");
+      i.style.width = `${Math.min(1, Math.abs(v) / 3) * 50}%`; // full half-width at 3R
+      b.appendChild(i);
+    }
+    return b;
+  }
+
+  function renderTape(s) {
+    const box = $("tape");
+    const stats = $("tape-stats");
+    stats.replaceChildren();
+    const table = el("table");
+    const thead = el("thead");
+    const tbody = el("tbody");
+    table.append(thead, tbody);
+    box.replaceChildren(table);
+    const head = (cols) => {
+      const tr = el("tr");
+      cols.forEach(([t, cls]) => tr.appendChild(el("th", t, cls)));
+      thead.appendChild(tr);
+    };
+    const stat = (k, v, cls) => { const st = el("span", k, "stat"); st.appendChild(el("b", v, cls)); stats.appendChild(st); };
+    if (tab === "trades") {
+      head([["Closed"], ["Market"], ["Entry → exit", "r opt"], ["Exit", "opt"], ["R", "r"], ["Net P&L", "r"]]);
+      if (!Array.isArray(s.trades)) return emptyRow(tbody, `Trades unavailable: ${s.trades ? s.trades.error : "not reported by this bot version"}`, 6);
+      const trades = s.trades;
+      if (!trades.length) return emptyRow(tbody, "No closed trades yet. They print here as positions exit.", 6);
+      const winners = trades.filter((t) => n(t.net_pnl) > 0);
+      const totR = trades.reduce((a, t) => a + n(t.realized_r), 0);
+      const totP = trades.reduce((a, t) => a + n(t.net_pnl), 0);
+      stat("Trades", String(trades.length));
+      stat("Win rate", pct((winners.length / trades.length) * 100, 0));
+      stat("Total", sr(totR), tone(totR));
+      stat("Net", smoney(totP), tone(totP));
+      if (winners.length) { const w = winners.reduce((a, t) => a + n(t.realized_r), 0) / winners.length; stat("Avg win", sr(w), "up"); }
+      const losers = trades.length - winners.length;
+      if (losers) { const l = trades.filter((t) => n(t.net_pnl) <= 0).reduce((a, t) => a + n(t.realized_r), 0) / losers; stat("Avg loss", sr(l), "down"); }
+      trades.forEach((t) => {
+        const tr = el("tr");
+        const rv = n(t.realized_r);
+        const rc = el("div", null, "rcell");
+        rc.append(rbar(rv), el("span", sr(rv), tone(rv)));
+        tr.append(
+          td(stamp(t.closed_at), "num dim"),
+          td(symCell(t.symbol, t.side)),
+          td(`${price(t.entry)} → ${price(t.exit)}`, "r num opt"),
+          td(EXIT[t.exit_reason] || sentence(t.exit_reason), "opt"),
+          td(rc, "r num"),
+          td(el("span", smoney(n(t.net_pnl)), tone(n(t.net_pnl))), "r num"),
+        );
+        tbody.appendChild(tr);
+      });
+    } else {
+      head([["Updated"], ["Market"], ["State"], ["Filled", "r"], ["Avg price", "r opt"], ["Stop check", "opt"], ["Note", "opt"]]);
+      if (!Array.isArray(s.orders)) return emptyRow(tbody, `Orders unavailable: ${s.orders && s.orders.error}`, 7);
+      if (!s.orders.length) return emptyRow(tbody, "No orders yet. They appear here as signals are executed.", 7);
+      const states = {};
+      s.orders.forEach((o) => { states[o.state] = (states[o.state] || 0) + 1; });
+      Object.entries(states).forEach(([k, v]) => stat(sentence(k), String(v)));
+      s.orders.forEach((o) => {
+        const tr = el("tr");
+        const prot = { confirmed: ["Confirmed", "up"], failed: ["Failed", "down"], recovered: ["Recovered", "warn"], flattened: ["Flattened", "warn"] }[o.protective];
+        tr.append(
+          td(stamp(o.updated_at), "num dim"),
+          td(symCell(o.symbol, o.side, o.client_order_id)),
+          td(pill(sentence(o.state), ORDER_TONE[o.state] || "")),
+          td(`${qty(n(o.filled))} / ${qty(n(o.size))}`, "r num"),
+          td(o.avg_price ? price(o.avg_price) : "–", "r num opt"),
+          td(prot ? pill(prot[0], prot[1]) : o.protective && o.protective !== "none" ? sentence(o.protective) : "–", "opt"),
+          td(o.reason || "", "opt dim"),
+        );
+        tbody.appendChild(tr);
+      });
+    }
+  }
+
+  // ---------- risk limits ----------
+  function gauge(name, valText, limitText, used, limit, note, ticks) {
+    const g = el("div", null, "gauge");
+    const top = el("div", null, "top");
+    const val = el("span", valText, "val");
+    if (limitText) val.appendChild(el("small", ` / ${limitText}`));
+    top.append(el("span", name, "name"), val);
+    const tr = el("div", null, "track");
+    tr.appendChild(el("i"));
+    const frac = setLevel(tr, used, limit);
+    (ticks || []).forEach((at) => { if (fin(at) && limit > 0) { const b = el("b"); b.style.left = `${Math.min(1, at / limit) * 100}%`; tr.appendChild(b); } });
+    g.append(top, tr);
+    if (note) g.appendChild(el("div", note, "note" + (frac > 1 ? " down" : "")));
+    return g;
+  }
+
+  function renderLimits(s) {
+    const box = $("gauges");
+    const port = portfolioOf(s);
+    box.replaceChildren();
+    if (!port) {
+      box.appendChild(el("div", "The trend portfolio is not running, so there are no portfolio limits to show.", "empty"));
+      $("limits-meta").textContent = "";
+      return;
+    }
+    const lim = port.limits || {};
+    $("limits-meta").textContent = port.as_of ? `as of ${when(port.as_of)}` : "";
+    const overNote = (v, l) => (v > l ? "Above the entry limit: new entries are refused (winners' trailing risk can sit above it)." : "");
+    const or = n(port.open_risk_pct), orl = n(lim.max_open_risk) * 100;
+    box.appendChild(gauge("Open risk to stops", pct(or), pct(orl, 1), or, orl, overNote(or, orl)));
+    const cr = n(port.correlated_risk_pct), crl = n(lim.max_correlated_risk) * 100;
+    box.appendChild(gauge("Correlation-adjusted risk", pct(cr), pct(crl, 1), cr, crl, overNote(cr, crl)));
+    const lev = n(port.gross_leverage), levl = n(lim.max_gross_leverage);
+    box.appendChild(gauge("Gross leverage", `${fin(lev) ? lev.toFixed(2) : "–"}x`, `${fin(levl) ? levl.toFixed(1) : "–"}x`, lev, levl));
+    const dd = n(port.drawdown_pct), halt = n(lim.drawdown_halt) * 100, red = n(lim.drawdown_reduce) * 100;
+    box.appendChild(gauge("Drawdown from peak", pct(dd), pct(halt, 0), dd, halt,
+      `${port.risk_scaled ? "In drawdown: trade size halved. " : ""}Size halves at ${pct(red, 0)} (amber tick); entries stop at ${pct(halt, 0)}.`, [red]));
+
+    const posG = el("div", null, "gauge");
+    const top = el("div", null, "top");
+    const pv = el("span", String(port.positions ?? 0), "val");
+    pv.appendChild(el("small", ` / ${lim.max_positions ?? "–"}`));
+    top.append(el("span", "Positions", "name"), pv);
+    const pips = el("div", null, "pips");
+    for (let i = 0; i < (lim.max_positions || 0); i++) pips.appendChild(el("i", null, i < port.positions ? "slot" : ""));
+    posG.append(top, pips);
+    box.appendChild(posG);
+
+    if (lim.loss_pause_after) {
+      const g = el("div", null, "gauge");
+      const t = el("div", null, "top");
+      const sv = el("span", String(port.loss_streak || 0), "val");
+      sv.appendChild(el("small", ` / ${lim.loss_pause_after}`));
+      t.append(el("span", "Losing streak", "name"), sv);
+      const p = el("div", null, "pips");
+      for (let i = 0; i < lim.loss_pause_after; i++) p.appendChild(el("i", null, i < (port.loss_streak || 0) ? "on" : ""));
+      g.append(t, p, el("div", `${lim.loss_pause_after} losses in a row pause new entries for ${lim.loss_pause_hours}h. A win resets it.`, "note"));
+      box.appendChild(g);
+    }
+    const ent = el("div", null, "entries");
+    const rpt = n(lim.risk_per_trade) * 100 * (port.risk_scaled ? n(lim.drawdown_risk_scale) || 0.5 : 1);
+    ent.append(el("span", `Risk per trade ${pct(rpt)}`, "dim mono"));
+    ent.append(port.loss_pause_until ? pill(`Paused to ${when(port.loss_pause_until)}`, "warn")
+      : port.entries_allowed ? pill("Entries open", "up") : pill("Entries stopped", "down"));
+    box.appendChild(ent);
+  }
+
+  // ---------- signals ----------
+  function renderSignals(s) {
     const trend = s.trend;
-    const batch = (trend && trend.last_batch) || null;
-    $("trend-hint").textContent = trend
-      ? (batch ? `Last decision batch at the ${fmtTime(batch.bar_close)} close (${batch.symbols_reported.length} symbols reported).` : "No breakout decisions yet since start.")
-      : "Trend pipeline not running.";
-    fill($("trend-batch"), ((batch && batch.decisions) || []).map((d) => row([
-      d.symbol, d.side === "long" ? "Long" : "Short", { text: fmtNum(d.strength, 2), cls: "r num" },
-      d.accepted ? pill("Taken", "good") : pill(sentence(d.reason), "warn"),
-      { text: d.accepted ? fmtNum(d.contracts, 0) : "–", cls: "r num" },
-    ])), "No decisions in the last batch.", 5);
-    fill($("trend-universe"), ((trend && trend.universe) || []).map((u) => row([
-      u.symbol,
-      u.tradable ? (u.ready ? pill("Ready", "good") : pill("Warming up", "warn")) : pill("Not on venue", "bad"),
-      { text: fmtNum(u.bars, 0), cls: "r num" }, u.warmup_error ? `Warm-up failed: ${u.warmup_error}` : fmtTime(u.last_bar),
-    ])), "No symbols.", 4);
+    const uni = $("universe");
+    const md = s.market_data_age_seconds || {};
+    const allowed = 4 * 3600 + 90; // a 4h candle ages one period before the next arrives
+    uni.replaceChildren();
+    const list = (trend && trend.universe) || [];
+    if (!list.length) uni.appendChild(el("div", trend ? "No symbols." : "Trend pipeline not running.", "empty"));
+    list.forEach((u) => {
+      const state = !u.tradable ? "off" : u.ready ? "ready" : "warming";
+      const c = el("div", null, "coin");
+      c.dataset.state = state;
+      const c1 = el("div", null, "c1");
+      c1.append(el("span", null, "dot"), el("span", short(u.symbol)));
+      const a = (md[u.symbol] || {})["4h"];
+      const line = u.warmup_error ? "warm-up failed" : !u.tradable ? "not on venue" : state === "warming" ? "warming up" : fin(a) ? `${age(a)} old` : `${u.bars} bars`;
+      c.title = `${u.symbol}: ${state === "ready" ? "ready" : state === "warming" ? "warming up" : "not tradable on this venue"} · ${u.bars} bars · last bar opened ${when(u.last_bar)}${u.warmup_error ? " · " + u.warmup_error : ""}`;
+      c.append(c1, el("div", line, "c2"));
+      if (fin(a) && u.tradable) {
+        const f = el("div", null, "fresh");
+        f.appendChild(el("i"));
+        setLevel(f, a, allowed);
+        c.appendChild(f);
+      }
+      uni.appendChild(c);
+    });
+    const batch = trend && trend.last_batch;
+    $("sig-meta").textContent = trend ? `${list.filter((u) => u.ready).length}/${list.length} ready` : "";
+    $("batch-title").textContent = batch ? `Last decision batch · ${when(batch.bar_close)} close` : "Last decision batch";
+    const tb = $("decisions");
+    const ds = (batch && batch.decisions) || [];
+    if (!ds.length) return emptyRow(tb, batch ? "No breakouts in the last batch." : "No breakout decisions yet since start.", 3);
+    tb.replaceChildren(...ds.map((d) => {
+      const tr = el("tr");
+      tr.append(td(symCell(d.symbol, d.side)), td(fin(n(d.strength)) ? n(d.strength).toFixed(2) : "–", "r num"),
+        td(d.accepted ? pill(`Taken · ${qty(n(d.contracts))}`, "up") : pill(sentence(String(d.reason || "").replace(/^portfolio:/, "")), "warn"), "r"));
+      return tr;
+    }));
+  }
 
-    const orders = Array.isArray(s.orders) ? s.orders : [];
-    const ordersEmpty = Array.isArray(s.orders) ? "No orders yet. They appear here as signals are executed." : `Orders unavailable: ${s.orders && s.orders.error}`;
-    fill($("orders"), orders.map((o) => row([
-      o.client_order_id, o.symbol, o.side === "buy" ? "Long" : "Short",
-      pill(sentence(o.state), ORDER_TONE[o.state] || ""),
-      { text: `${fmtNum(o.filled, 4)} / ${fmtNum(o.size, 4)}`, cls: "r num" },
-      { text: o.avg_price ? fmtPrice(o.avg_price) : "–", cls: "r num" },
-      o.protective === "confirmed" ? pill("Confirmed", "good")
-        : o.protective === "failed" ? pill("Failed", "bad")
-        : o.protective === "recovered" ? pill("Recovered", "warn")
-        : o.protective === "flattened" ? pill("Flattened", "warn")
-        : sentence(o.protective === "none" ? "" : o.protective),
-      o.reason || "", fmtTime(o.updated_at),
-    ])), ordersEmpty, 9);
+  // ---------- system ----------
+  function renderSystem(s) {
+    const comps = s.components || [];
+    $("components").replaceChildren(...comps.map((c) => {
+      const li = el("li");
+      li.append(el("span", null, "led " + c.status), el("span", c.name, "n"), el("span", c.status, "st " + c.status), el("span", c.detail, "d"));
+      return li;
+    }));
+    $("sys-meta").textContent = comps.length ? `${comps.filter((c) => c.status === "healthy").length}/${comps.length} healthy` : "";
 
-    fill($("discrepancies"), (s.discrepancies || []).map((d) => row([
-      sentence(d.kind), d.order || d.symbol || "",
-    ])), "None. Local state matches the exchange.", 2);
+    const b = $("breakers");
+    b.replaceChildren();
+    const risk = s.risk || {};
+    const entries = Object.entries(risk.circuit_breakers || {});
+    if (entries.length || risk.kill_switch_active || risk.error) {
+      const box = el("div", null, "breakers");
+      if (risk.error) box.appendChild(el("div", risk.error));
+      if (risk.kill_switch_active) box.appendChild(el("b", "Kill switch engaged"));
+      if (entries.length) {
+        box.appendChild(el("b", entries.length === 1 ? " One circuit breaker open" : ` ${entries.length} circuit breakers open`));
+        const ul = el("ul");
+        entries.forEach(([k, v]) => ul.appendChild(el("li", `${k}: ${v}`)));
+        box.appendChild(ul);
+      }
+      b.appendChild(box);
+    }
+    const ks = $("kill-state");
+    ks.textContent = risk.kill_switch_active ? "ENGAGED" : "off";
+    ks.className = "meta " + (risk.kill_switch_active ? "down" : "");
 
-    const subs = (s.event_bus && s.event_bus.subscribers) || {};
-    const replay = s.replay || {};
-    fill($("replay"), Object.entries(subs).map(([name, st]) => row([
-      name, { text: fmtNum(replay[name] || 0, 0), cls: "r num" },
-      { text: fmtNum(st.delivered, 0), cls: "r num" }, { text: fmtNum(st.lag, 0), cls: "r num" },
-    ])), "No consumers registered.", 4);
+    const e = s.environment || {};
+    const bus = s.event_bus || {};
+    const sync = s.trailing_last_sync;
+    const rows = [
+      ["Kill switch", risk.kill_switch_active ? "Engaged" : "Off"],
+      ["Event backlog", `${s.event_backlog ?? 0}${bus.journal_healthy === false ? ` · ${bus.journal_pending} buffered` : ""}`],
+      ["Venue", [e.venue, e.binance_trade_mode || (e.exec_mode === "live" ? e.delta_mode : null)].filter(Boolean).join(" · ") || "–"],
+      ["Stops last synced", sync ? `${when(sync.at)} (${sync.reason})` : "–"],
+      ["Build", `${e.version || "?"} · ${e.commit ? String(e.commit).slice(0, 8) : "?"}${e.dirty ? " (modified)" : ""}`],
+    ];
+    if (e.not_on_delta && e.not_on_delta.length) rows.push(["Not on venue", e.not_on_delta.map((m) => String(m).split(" ")[0]).join(", ")]);
+    const dl = $("sysinfo");
+    dl.replaceChildren();
+    rows.forEach(([k, v]) => dl.append(el("dt", k), el("dd", v)));
+  }
 
-    const audit = Array.isArray(s.audit) ? s.audit : [];
-    fill($("audit"), audit.map((a) => row([
-      fmtTime(a.at), a.actor,
-      el("span", `${a.succeeded ? sentence(a.action) : "Refused " + a.action}${a.reason ? ": " + a.reason : ""}`),
-    ])), Array.isArray(s.audit) ? "No operator actions recorded." : "Audit trail unavailable while the database is down.", 3);
-
+  // ---------- diagnostics ----------
+  function renderDiag(s) {
     const acct = $("account");
     acct.replaceChildren();
     const a = s.account;
     const pairs = a ? [
-      ["Starting equity", fmtMoney(a.initial)], ["Cash", fmtMoney(a.cash)], ["Unrealised PnL", fmtMoney(a.unrealized)],
-      ["Realised PnL", fmtMoney(a.realized_pnl)], ["Fees paid", fmtMoney(a.fees_paid)], ["Funding", fmtMoney(a.funding)],
-    ] : [["Mode", "Live: balances come from the venue"]];
-    for (const [k, v] of pairs) { acct.appendChild(el("dt", k)); acct.appendChild(el("dd", v)); }
+      ["Starting equity", money(n(a.initial))], ["Cash", money(n(a.cash))], ["Unrealised", smoney(n(a.unrealized))],
+      ["Realised", smoney(n(a.realized_pnl))], ["Fees paid", money(n(a.fees_paid))], ["Funding", smoney(n(a.funding))],
+    ] : [["Balances", "held at the venue"]];
+    pairs.forEach(([k, v]) => acct.append(el("dt", k), el("dd", v)));
+
+    const disc = s.discrepancies || [];
+    const dt = $("discrepancies");
+    if (!disc.length) emptyRow(dt, "None. Local state matches the exchange.", 2);
+    else dt.replaceChildren(...disc.map((d) => { const tr = el("tr"); tr.append(td(sentence(d.kind)), td(d.order || d.symbol || "", "num")); return tr; }));
+
+    const subs = (s.event_bus && s.event_bus.subscribers) || {};
+    const replay = s.replay || {};
+    const rt = $("replay");
+    const names = Object.keys(subs);
+    if (!names.length) emptyRow(rt, "No consumers registered.", 3);
+    else rt.replaceChildren(...names.map((k) => { const tr = el("tr"); tr.append(td(k), td(String(replay[k] || 0), "r num"), td(String(subs[k].lag ?? 0), "r num")); return tr; }));
+
+    const audit = Array.isArray(s.audit) ? s.audit : [];
+    const at = $("audit");
+    if (!audit.length) emptyRow(at, Array.isArray(s.audit) ? "No operator actions recorded." : "Audit trail unavailable while the database is down.", 2);
+    else at.replaceChildren(...audit.map((x) => {
+      const tr = el("tr");
+      tr.append(td(when(x.at), "num dim"), td(`${x.actor}: ${x.succeeded ? sentence(x.action) : "refused " + x.action}${x.reason ? " — " + x.reason : ""}`));
+      return tr;
+    }));
+    $("diag-meta").textContent = `ledger · ${disc.length} discrepanc${disc.length === 1 ? "y" : "ies"} · replay · audit`;
   }
 
+  // ---------- render loop ----------
   function render(s) {
-    renderHeader(s); renderAspect(s); renderKpis(s); renderInterlocks(s);
-    renderChart(s.equity_curve, s.account ? s.account.initial : null);
-    renderTables(s);
+    const book = bookRows(s);
+    renderHeader(s);
+    renderStatus(statusView(s));
+    renderKpis(s, book);
+    renderChart(s);
+    renderBook(s, book);
+    renderTape(s);
+    renderLimits(s);
+    renderSignals(s);
+    renderSystem(s);
+    renderDiag(s);
+  }
+  function safeRender(s) {
+    try { render(s); } catch (err) { console.error("control room render failed", err); }
   }
 
-  async function poll() {
+  async function poll(once) {
     try {
       const res = await fetch("/api/status", { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       last = await res.json();
       lastOk = new Date();
-      render(last);
+      safeRender(last);
     } catch (err) {
-      const a = $("aspect");
-      a.dataset.state = "unreachable";
-      $("aspect-title").textContent = "Can't reach the bot";
-      $("aspect-detail").textContent = lastOk
-        ? `Showing data from ${lastOk.toLocaleTimeString()}. The process may be down or restarting (${err.message}).`
-        : `No status received yet (${err.message}). Check that the ops server is running.`;
-      const u = $("updated"); if (u) u.className = "stale";
+      renderStatus({
+        pill: "OFFLINE", cls: "", tone: "mute", title: "Can't reach the bot",
+        detail: lastOk ? `Showing data from ${lastOk.toLocaleTimeString()}. The process may be down or restarting (${err.message}).`
+          : `No status received yet (${err.message}). Check that the ops server is running.`,
+      });
+      const u = $("updated");
+      if (u) u.className = "stale";
     } finally {
-      setTimeout(poll, POLL_MS);
+      if (!once) setTimeout(poll, POLL_MS);
     }
   }
+
+  // ---------- blotter tabs ----------
+  function setTab(next, save) {
+    tab = next;
+    $("tab-trades").setAttribute("aria-selected", String(next === "trades"));
+    $("tab-orders").setAttribute("aria-selected", String(next === "orders"));
+    $("tape").setAttribute("aria-labelledby", next === "trades" ? "tab-trades" : "tab-orders");
+    if (save) try { localStorage.setItem("signalbot-tape", next); } catch (_) { /* per-viewer nicety only */ }
+    if (last) { try { renderTape(last); } catch (err) { console.error(err); } }
+  }
+  $("tab-trades").addEventListener("click", () => setTab("trades", true));
+  $("tab-orders").addEventListener("click", () => setTab("orders", true));
+  try { const t = localStorage.getItem("signalbot-tape"); if (t === "orders" || t === "trades") setTab(t, false); } catch (_) { /* ignore */ }
 
   // ---------- controls ----------
   $("token").addEventListener("input", (e) => { token = e.target.value; });
   $("resume-confirm").addEventListener("input", (e) => { $("resume").disabled = e.target.value !== "RESUME"; });
+  $("halt-jump").addEventListener("click", () => { setTimeout(() => $("token").focus({ preventScroll: true }), 350); });
 
   async function control(path, body, out) {
     out.className = "result"; out.textContent = "Sending…";
-    if (!token) { out.className = "result err"; out.textContent = "Enter the operator token first."; return; }
+    if (!token) { out.className = "result err"; out.textContent = "Enter the operator token first."; return null; }
     try {
       const res = await fetch(path, {
         method: "POST",
@@ -853,7 +1401,7 @@ td.r, th.r { text-align: right; }
       out.textContent = data.persisted === false
         ? "Halted in this process, but the database write failed. Use the CLI to persist it."
         : "Trading halted. New orders are refused.";
-      poll();
+      poll(true);
     }
   });
   $("resume").addEventListener("click", async () => {
@@ -866,20 +1414,15 @@ td.r, th.r { text-align: right; }
       out.className = "result ok";
       out.textContent = open.length ? `Kill switch cleared. Still blocked by: ${open.join(", ")}.` : "Kill switch cleared. Trading resumed.";
       $("resume-confirm").value = ""; $("resume").disabled = true;
-      poll();
+      poll(true);
     }
   });
 
-  // ---------- theme ----------
-  $("theme").addEventListener("click", () => {
-    const root = document.documentElement;
-    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-    root.dataset.theme = dark ? "light" : "dark";
-    try { localStorage.setItem("signalbot-theme", root.dataset.theme); } catch (_) {}
-    if (last) renderChart(last.equity_curve, last.account ? last.account.initial : null);
+  let resizeTimer = 0;
+  addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (last) renderChart(last, true); }, 120);
   });
-  try { const t = localStorage.getItem("signalbot-theme"); if (t) document.documentElement.dataset.theme = t; } catch (_) {}
-  addEventListener("resize", () => { if (last) renderChart(last.equity_curve, last.account ? last.account.initial : null); });
 
   poll();
 })();

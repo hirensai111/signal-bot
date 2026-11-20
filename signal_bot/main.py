@@ -549,6 +549,7 @@ async def main() -> None:
         status = StatusService(
             environment={
                 "exec_mode": settings.exec_mode,
+                "bot_label": settings.bot_label,  # display name when several bots run
                 "venue": adapter.venue,
                 "delta_mode": settings.delta_mode,
                 "version": package_version(),
