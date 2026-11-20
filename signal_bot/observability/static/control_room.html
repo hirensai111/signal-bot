@@ -427,6 +427,7 @@ footer { margin-top: 18px; font: 400 11px/1.5 var(--font-mono); color: var(--tex
         </div>
         <div class="chart-wrap" id="chart-wrap">
           <svg class="chart" id="chart" role="img" aria-label="Equity over time"></svg>
+          <div class="empty" id="chart-empty" hidden></div>
           <div class="tooltip" id="tip" hidden></div>
         </div>
       </section>
@@ -729,7 +730,7 @@ footer { margin-top: 18px; font: 400 11px/1.5 var(--font-mono); color: var(--tex
     const breakers = Object.entries(risk.circuit_breakers || {});
     const comps = s.components || [];
     const list = (pred) => comps.filter(pred).map((c) => `${c.name}: ${c.detail}`).join("; ");
-    if (risk.kill_switch_active) return { pill: "HALTED", cls: "down solid", tone: "down", title: "Stopped: kill switch engaged", detail: `${risk.kill_switch_reason || "No reason recorded"}. New orders are refused until an operator resumes trading.` };
+    if (risk.kill_switch_active) return { pill: "HALTED", cls: "down solid", tone: "down", title: "Stopped: kill switch engaged", detail: `${risk.kill_switch_reason || "No reason recorded"}. New orders are refused until an operator resumes trading.${breakers.length ? ` Also open: ${breakers.map(([k, v]) => `${k} (${v})`).join("; ")}.` : ""}` };
     if (breakers.length) return { pill: "PAUSED", cls: "down solid", tone: "down", title: "Paused: an interlock is open", detail: breakers.map(([k, v]) => `${k} (${v})`).join("; ") + ". Trading resumes on its own once the condition clears." };
     if (risk.blocking_reason) return { pill: "LIMIT HIT", cls: "warn solid", tone: "warn", title: "Paused: a risk limit is reached", detail: `${risk.blocking_reason}. New signals are refused until the limit clears (daily limits reset at 00:00 UTC).` };
     if (s.overall === "failed") return { pill: "NOT SAFE", cls: "down solid", tone: "down", title: "Not safe to trade", detail: list((c) => c.status === "failed") };
@@ -785,7 +786,8 @@ footer { margin-top: 18px; font: 400 11px/1.5 var(--font-mono); color: var(--tex
     day.className = "v " + tone(today.length ? dayPnl : dayR);
     const lossLim = Math.abs(n((risk.limits || {}).daily_loss_limit_r));
     const count = risk.daily_trade_count ?? today.length;
-    $("k-day-sub").textContent = `${fin(dayR) ? sr(dayR) : "–"} · ${count} trade${count === 1 ? "" : "s"}${lossLim ? ` · limit −${lossLim}R` : ""}`;
+    $("k-day-sub").textContent = !fin(dayR) && !today.length && risk.error ? "risk state unavailable"
+      : `${today.length && fin(dayR) ? `${sr(dayR)} · ` : ""}${count} trade${count === 1 ? "" : "s"}${lossLim ? ` · limit −${lossLim}R` : ""}`;
 
     const marked = book.filter((r) => fin(r.pnl));
     const openPnl = acct ? n(acct.unrealized) : marked.length ? marked.reduce((a, r) => a + r.pnl, 0) : NaN;
@@ -853,15 +855,15 @@ footer { margin-top: 18px; font: 400 11px/1.5 var(--font-mono); color: var(--tex
     $("curve-meta").textContent = kind === "pnl" ? "cumulative net P&L of the closed trades below" : "marked to market every minute · dashed line = starting equity";
     const stats = $("curve-stats");
     stats.replaceChildren();
+    const empty = $("chart-empty");
     if (pts.length < 2) {
-      const H0 = 110;
-      root.setAttribute("viewBox", `0 0 ${W} ${H0}`);
-      root.style.height = H0 + "px";
-      svg("text", { class: "note", x: W / 2, y: H0 / 2, "text-anchor": "middle" }, root).textContent =
-        pts.length ? "One sample so far. The curve appears after the next snapshot." : "No equity history yet. It fills in as the bot runs and trades close.";
+      root.style.display = "none";
+      empty.hidden = false;
+      empty.textContent = pts.length ? "One sample so far. The curve appears after the next snapshot." : "No equity history yet. It fills in as the bot runs and trades close.";
       return;
     }
-    root.style.height = "";
+    root.style.display = "";
+    empty.hidden = true;
     const H = root.clientHeight || 250;
     const L = 2, R = 76, T = 16, B = 22;
     root.setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -998,7 +1000,9 @@ footer { margin-top: 18px; font: 400 11px/1.5 var(--font-mono); color: var(--tex
   function renderBook(s, book) {
     const tbody = $("book");
     const prot = s.protection;
-    $("book-meta").textContent = book.length ? `${book.length} open · ${book.filter((r) => r.long).length} long / ${book.filter((r) => !r.long).length} short` : "";
+    const fromVenue = prot && !Array.isArray(prot);
+    $("book-meta").textContent = (book.length ? `${book.length} open · ${book.filter((r) => r.long).length} long / ${book.filter((r) => !r.long).length} short` : "")
+      + (fromVenue ? `${book.length ? " · " : ""}database unavailable: showing the exchange's view (no marks or R)` : "");
     if (!book.length) {
       emptyRow(tbody, Array.isArray(prot) || !prot ? "Flat. No open positions." : `Book unavailable: ${prot.error}`, 8);
       return;
@@ -1255,9 +1259,9 @@ footer { margin-top: 18px; font: 400 11px/1.5 var(--font-mono); color: var(--tex
     if (entries.length || risk.kill_switch_active || risk.error) {
       const box = el("div", null, "breakers");
       if (risk.error) box.appendChild(el("div", risk.error));
-      if (risk.kill_switch_active) box.appendChild(el("b", "Kill switch engaged"));
+      if (risk.kill_switch_active) box.appendChild(el("div")).appendChild(el("b", "Kill switch engaged"));
       if (entries.length) {
-        box.appendChild(el("b", entries.length === 1 ? " One circuit breaker open" : ` ${entries.length} circuit breakers open`));
+        box.appendChild(el("div")).appendChild(el("b", entries.length === 1 ? "One circuit breaker open" : `${entries.length} circuit breakers open`));
         const ul = el("ul");
         entries.forEach(([k, v]) => ul.appendChild(el("li", `${k}: ${v}`)));
         box.appendChild(ul);
