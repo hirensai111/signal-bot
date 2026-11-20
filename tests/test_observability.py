@@ -3,11 +3,16 @@
 import json
 import logging
 import re
+import uuid
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from signal_bot.db.models import TradeResult
 from signal_bot.observability import metrics
 from signal_bot.observability.logging import JsonFormatter, bind
 from signal_bot.observability.positions import PositionView
@@ -65,6 +70,10 @@ async def test_status_reports_trades_positions_and_components(ops):
     assert body["positions"][0]["symbol"] == "BTCUSD"
     assert body["orders"][0]["state"] == "filled"
     assert {c["name"] for c in body["components"]} >= {"Risk governor", "Event journal"}
+    held = body["protection"][0]
+    assert float(held["contract_value"]) > 0
+    assert held["mark"] is None  # no trend pipeline here: no 4h close to mark against
+    assert body["trades"] == []
 
 
 async def test_halt_requires_token_and_reason_and_is_audited(ops):
@@ -175,3 +184,50 @@ async def test_failed_guesses_never_block_a_valid_halt(ops):
         await client.post("/api/risk/halt", json={"reason": "xyz"}, headers=_auth("bad"))
     r = await client.post("/api/risk/halt", json={"reason": "real emergency"}, headers=_auth())
     assert r.status == 200 and h.governor.gate_open()[0] is False
+
+
+async def test_status_lists_closed_trades_newest_first(ops):
+    h, client, _ = ops
+    t0 = datetime(2026, 11, 20, 8, tzinfo=timezone.utc)
+    async with h.raw_factory() as session:
+        for i, (pnl, r) in enumerate([(-50, "-1"), (120, "2.4")]):
+            session.add(
+                TradeResult(
+                    signal_id=uuid.uuid4(),
+                    venue="paper",
+                    symbol="ETHUSD",
+                    side="long",
+                    intended_entry=Decimal("100"),
+                    actual_entry=Decimal("100.5"),
+                    exit_price=Decimal("110"),
+                    exit_reason="trail",
+                    size_requested=Decimal("2"),
+                    size_filled=Decimal("2"),
+                    gross_pnl=Decimal(pnl),
+                    fees=Decimal("1.25"),
+                    funding=Decimal("0"),
+                    net_pnl=Decimal(pnl),
+                    signal_r=Decimal(r),
+                    realized_r=Decimal(r),
+                    entry_slippage_bps=Decimal("0"),
+                    closed_at=t0 + timedelta(hours=i),
+                )
+            )
+        await session.commit()
+    body = await (await client.get("/api/status")).json()
+    newest, older = body["trades"]
+    assert newest["net_pnl"] == 120 and newest["realized_r"] == 2.4
+    assert float(newest["entry"]) == 100.5 and newest["exit_reason"] == "trail"
+    assert older["net_pnl"] == -50 and older["realized_r"] == -1
+    assert newest["closed_at"].startswith("2026-11-20T09:00")
+
+
+def test_position_mark_is_latest_4h_close_in_venue_prices():
+    history = SimpleNamespace(last_close_price=lambda s: {"BTCUSDT": 60000.0}.get(s))
+    adapter = SimpleNamespace(binance_symbol=lambda s: {"BTCUSD": "BTCUSDT"}.get(s))
+    trend = SimpleNamespace(history=history, portfolio=SimpleNamespace(adapter=adapter))
+    status = StatusService({}, None, None, None, None, trend=trend)
+    order = SimpleNamespace(symbol="BTCUSD", price_basis=25)
+    assert status._mark(order) == 60025.0
+    assert status._mark(SimpleNamespace(symbol="XYZUSD", price_basis=None)) is None
+    assert StatusService({}, None, None, None, None)._mark(order) is None

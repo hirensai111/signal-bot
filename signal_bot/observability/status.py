@@ -14,7 +14,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from signal_bot.db.models import OperatorAudit, Order
+from signal_bot.db.models import OperatorAudit, Order, TradeResult
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +163,49 @@ class StatusService:
             for o in rows
         ]
 
+    async def trades(self, limit: int = 30) -> list[dict[str, Any]] | dict:
+        """Recently closed trades, newest first, with net P&L and realised R."""
+        try:
+            async with self.session_factory() as session:
+                rows = await session.execute(
+                    select(TradeResult).order_by(TradeResult.closed_at.desc()).limit(limit)
+                )
+                return [
+                    {
+                        "symbol": t.symbol,
+                        "side": t.side,
+                        "entry": str(t.actual_entry),
+                        "exit": str(t.exit_price),
+                        "exit_reason": t.exit_reason,
+                        "size": str(t.size_filled),
+                        "net_pnl": float(t.net_pnl),
+                        "fees": float(t.fees),
+                        "realized_r": float(t.realized_r),
+                        "closed_at": _iso(t.closed_at),
+                    }
+                    for t in rows.scalars()
+                ]
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _mark(self, order) -> float | None:
+        """Latest completed 4h close for the order's symbol, in the venue's price terms.
+
+        The same price the portfolio limits and the trailing stop are judged on; it is
+        not a tick-by-tick mark.
+        """
+        if self.trend is None:
+            return None
+        try:
+            adapter = self.trend.portfolio.adapter
+            symbol = adapter.binance_symbol(order.symbol) or order.symbol
+            close = self.trend.history.last_close_price(symbol)
+        except Exception:
+            return None
+        if close is None:
+            return None
+        return float(close) + float(order.price_basis or 0)
+
     async def protection(self) -> list[dict[str, Any]] | dict:
         """Open positions' stops: mode, initial and current stop, trail, time stop."""
         from signal_bot.execution.orders import OrderState
@@ -202,6 +245,10 @@ class StatusService:
                     else str(o.take_profit_price),
                     "trail_distance": None if o.trail_distance is None else str(o.trail_distance),
                     "best_reference_price": None if o.best_price is None else str(o.best_price),
+                    # venue price = reference price + basis; size x contract value = units
+                    "price_basis": None if o.price_basis is None else str(o.price_basis),
+                    "contract_value": str(o.contract_value or 1),
+                    "mark": self._mark(o),
                     "stop_updated_at": _iso(o.stop_updated_at),
                     "time_stop_at": _iso(o.time_stop_at),
                     "protective": o.protective_status,
@@ -261,6 +308,7 @@ class StatusService:
             "equity_curve": curve,
             "positions": self.position_view.snapshot() if self.position_view else [],
             "orders": await self.orders(),
+            "trades": await self.trades(),
             "discrepancies": list(getattr(self.reconciler, "last_discrepancies", []) or []),
             "event_bus": bus_stats,
             "event_backlog": sum(s["lag"] for s in bus_stats.get("subscribers", {}).values()),
